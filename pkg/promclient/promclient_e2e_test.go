@@ -3,6 +3,7 @@ package promclient
 import (
 	"context"
 	"fmt"
+	"github.com/hashicorp/go-version"
 	"io/ioutil"
 	"net/url"
 	"os"
@@ -141,4 +142,37 @@ func TestRule_UnmarshalScalarResponse(t *testing.T) {
 	// Test invalid format of scalar data.
 	vectorResult, err = convertScalarJSONToVector(invalidDataScalarJSONResult)
 	testutil.NotOk(t, err)
+}
+
+func TestParseVersion(t *testing.T) {
+	promVersions := map[string]string{
+		"": promVersionResp(""),
+		"2.2.0": promVersionResp("2.2.0"),
+		"2.3.0": promVersionResp("2.3.0"),
+		"2.3.0-rc.0": promVersionResp("2.3.0-rc.0"),
+	}
+
+	promMalformedVersions := map[string]string{
+		"foo": promVersionResp("foo"),
+		"bar": promVersionResp("bar"),
+	}
+
+	for v, resp := range promVersions {
+		gotVersion, err := parseVersion([]byte(resp))
+		testutil.Ok(t, err)
+		expectVersion, _ := version.NewVersion(v)
+		testutil.Equals(t, gotVersion, expectVersion)
+	}
+
+	for v, resp := range promMalformedVersions {
+		gotVersion, err := parseVersion([]byte(resp))
+		testutil.NotOk(t, err)
+		expectVersion, _ := version.NewVersion(v)
+		testutil.Equals(t, gotVersion, expectVersion)
+	}
+}
+
+// promVersionResp returns the response of Prometheus /version endpoint.
+func promVersionResp(ver string) string {
+	return fmt.Sprintf(`{"version":"%s","revision":"","branch":"","buildUser":"","buildDate":"","goVersion":""}`, ver)
 }

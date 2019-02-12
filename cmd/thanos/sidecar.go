@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"github.com/hashicorp/go-version"
+	"github.com/prometheus/common/model"
 	"math"
 	"net"
 	"net/http"
@@ -53,6 +55,8 @@ func registerSidecar(m map[string]setupFunc, app *kingpin.Application, name stri
 
 	uploadCompacted := cmd.Flag("shipper.upload-compacted", "[Experimental] If true sidecar will try to upload compacted blocks as well. Useful for migration purposes. Works only if compaction is disabled on Prometheus.").Default("false").Hidden().Bool()
 
+	validateProm := cmd.Flag("sidecar.validate-prom", "[Experimental]If true sidecar will check Prometheus' flags to ensure disabled compaction and 2h block-time.").Default("true").Hidden().Bool()
+
 	m[name] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ bool) error {
 		rl := reloader.New(
 			log.With(logger, "component", "reloader"),
@@ -81,6 +85,7 @@ func registerSidecar(m map[string]setupFunc, app *kingpin.Application, name stri
 			peer,
 			rl,
 			*uploadCompacted,
+			*validateProm,
 		)
 	}
 }
@@ -101,6 +106,7 @@ func runSidecar(
 	peer cluster.Peer,
 	reloader *reloader.Reloader,
 	uploadCompacted bool,
+	validateProm bool,
 ) error {
 	var m = &promMetadata{
 		promURL: promURL,
@@ -125,6 +131,40 @@ func runSidecar(
 
 		ctx, cancel := context.WithCancel(context.Background())
 		g.Add(func() error {
+			if validateProm {
+				// Retry infinitely until we get Prometheus version.
+				err := runutil.Retry(2*time.Second, ctx.Done(), func() error {
+					err := m.FetchPromVersion(logger)
+					if err != nil {
+						level.Warn(logger).Log(
+							"msg", "failed to get Prometheus version. Is Prometheus running? Retrying",
+							"err", err,
+						)
+						return errors.Wrapf(err, "fetch Prometheus version")
+					}
+					return nil
+				})
+				if err != nil {
+					return err
+				}
+
+				if m.version == nil {
+					level.Warn(logger).Log("msg", "can't fetch version, skip validation")
+				} else {
+					// Check if Prometheus has /status/flags endpoint.
+					if m.version.LessThan(promclient.FlagsVersion) {
+						level.Warn(logger).Log("msg",
+							"Prometheus doesn't support flags endpoint, skip validation", "version", m.version.Original())
+						return nil
+					}
+
+					// Check prometheus's flags to ensure sane sidecar flags.
+					if err := validatePrometheus(ctx, logger, promURL, dataDir); err != nil {
+						return errors.Wrap(err, "validate Prometheus flags")
+					}
+				}
+			}
+
 			// Blocking query of external labels before joining as a Source Peer into gossip.
 			// We retry infinitely until we reach and fetch labels from our Prometheus.
 			err := runutil.Retry(2*time.Second, ctx.Done(), func() error {
@@ -298,13 +338,31 @@ func runSidecar(
 	return nil
 }
 
+func validatePrometheus(ctx context.Context, logger log.Logger, promURL *url.URL, tsdbPath string) error {
+	flags, err := promclient.ConfiguredFlags(ctx, logger, promURL)
+	if err != nil {
+		return errors.Wrap(err, "configured flags; failed to check flags")
+	}
+	// Check if min-block-time and max-block-time are the same.
+	if flags.TSDBMinTime != flags.TSDBMaxTime {
+		return errors.New("TSDB Min-block-time mismatches with Max-block-time")
+	}
+	// Check if block-time equals 2h.
+	if flags.TSDBMinTime != model.Duration(2*time.Hour) {
+		level.Warn(logger).Log("msg", "TSDB Max-block-time and Min-block-time should be configured to 2h", "block-time", flags.TSDBMinTime)
+	}
+
+	return nil
+}
+
 type promMetadata struct {
 	promURL *url.URL
 
-	mtx    sync.Mutex
-	mint   int64
-	maxt   int64
-	labels labels.Labels
+	mtx     sync.Mutex
+	mint    int64
+	maxt    int64
+	labels  labels.Labels
+	version *version.Version
 }
 
 func (s *promMetadata) UpdateLabels(ctx context.Context, logger log.Logger) error {
@@ -354,4 +412,9 @@ func (s *promMetadata) Timestamps() (mint int64, maxt int64) {
 	defer s.mtx.Unlock()
 
 	return s.mint, s.maxt
+}
+
+func (s *promMetadata) FetchPromVersion(logger log.Logger) (err error) {
+	s.version, err =  promclient.GetPromVersion(logger, s.promURL)
+	return err
 }

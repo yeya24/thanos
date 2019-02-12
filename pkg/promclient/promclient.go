@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/hashicorp/go-version"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -27,6 +28,12 @@ import (
 	"github.com/prometheus/tsdb/labels"
 	"gopkg.in/yaml.v2"
 )
+
+var FlagsVersion *version.Version
+
+func init() {
+	FlagsVersion, _ = version.NewVersion("2.2.0")
+}
 
 // IsWALFileAccesible returns no error if WAL dir can be found. This helps to tell
 // if we have access to Prometheus TSDB directory.
@@ -335,6 +342,32 @@ func PromqlQueryInstant(ctx context.Context, logger log.Logger, base *url.URL, q
 	return vec, nil
 }
 
+// GetPromVersion will return the version of Prometheus by querying /version Prometheus endpoint.
+func GetPromVersion(logger log.Logger, base *url.URL) (*version.Version, error) {
+	if logger == nil {
+		logger = log.NewNopLogger()
+	}
+
+	u := *base
+	u.Path = path.Join(u.Path, "/version")
+	resp, err := http.Get(u.String())
+	if err != nil {
+		return nil, errors.Wrapf(err, "request version against %s", u.String())
+	}
+	defer runutil.CloseWithLogOnErr(logger, resp.Body, "query body")
+
+	b, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errors.Errorf("failed to read body")
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, errors.Errorf("got non-200 response code: %v, response: %v", resp.StatusCode, string(b))
+	}
+
+	return parseVersion(b)
+}
+
 // Scalar response consists of array with mixed types so it needs to be
 // unmarshaled separately.
 func convertScalarJSONToVector(scalarJSONResult json.RawMessage) (model.Vector, error) {
@@ -361,4 +394,25 @@ func convertScalarJSONToVector(scalarJSONResult json.RawMessage) (model.Vector, 
 		Metric:    model.Metric{},
 		Value:     resultValue,
 		Timestamp: resultTime}}, nil
+}
+
+// parseVersion converts string to version.Version.
+func parseVersion(data []byte) (*version.Version, error) {
+	var m struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, errors.Wrapf(err, "unmarshal response: %v", string(data))
+	}
+
+	if strings.TrimSpace(m.Version) == "" {
+		return nil, nil
+	}
+
+	ver, err := version.NewVersion(m.Version)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to parse version %s", m.Version)
+	}
+
+	return ver, nil
 }
