@@ -55,7 +55,7 @@ func registerSidecar(m map[string]setupFunc, app *kingpin.Application, name stri
 
 	uploadCompacted := cmd.Flag("shipper.upload-compacted", "[Experimental] If true sidecar will try to upload compacted blocks as well. Useful for migration purposes. Works only if compaction is disabled on Prometheus.").Default("false").Hidden().Bool()
 
-	validateProm := cmd.Flag("sidecar.validate-prom", "[Experimental]If true sidecar will check Prometheus' flags to ensure disabled compaction and 2h block-time.").Default("true").Hidden().Bool()
+	validateProm := cmd.Flag("sidecar.validate-prom", "If true sidecar will check Prometheus' flags to ensure disabled compaction and 2h block-time.").Default("true").Hidden().Bool()
 
 	m[name] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ bool) error {
 		rl := reloader.New(
@@ -341,15 +341,12 @@ func runSidecar(
 func validatePrometheus(ctx context.Context, logger log.Logger, promURL *url.URL, tsdbPath string) error {
 	flags, err := promclient.ConfiguredFlags(ctx, logger, promURL)
 	if err != nil {
-		return errors.Wrap(err, "configured flags; failed to check flags")
+		return errors.Wrap(err, "failed to check flags")
 	}
-	// Check if min-block-time and max-block-time are the same.
-	if flags.TSDBMinTime != flags.TSDBMaxTime {
-		return errors.New("TSDB Min-block-time mismatches with Max-block-time")
-	}
-	// Check if block-time equals 2h.
-	if flags.TSDBMinTime != model.Duration(2*time.Hour) {
-		level.Warn(logger).Log("msg", "TSDB Max-block-time and Min-block-time should be configured to 2h", "block-time", flags.TSDBMinTime)
+	// Check if min-block-time and max-block-time are 2h.
+	if flags.TSDBMinTime != model.Duration(2*time.Hour) || flags.TSDBMaxTime != model.Duration(2*time.Hour) {
+		return errors.Errorf("Found that TSDB Max time is %s and Min time is %s. "+
+			"Compaction needs to be disabled (storage.tsdb.min-block-duration = storage.tsdb.max-block-duration = 2h)", flags.TSDBMaxTime, flags.TSDBMinTime)
 	}
 
 	return nil

@@ -152,7 +152,7 @@ func NewWithCompacted(
 
 	if flags.TSDBMinTime != model.Duration(2*time.Hour) || flags.TSDBMaxTime != model.Duration(2*time.Hour) {
 		return nil, errors.Errorf("Found that TSDB Max time is %s and Min time is %s. To use shipper with upload compacted option, "+
-			"compaction needs to be disabled (storage.tsdb.min-block-duration = storage.tsdb.max-block-duration = 2h", flags.TSDBMinTime, flags.TSDBMaxTime)
+			"compaction needs to be disabled (storage.tsdb.min-block-duration = storage.tsdb.max-block-duration = 2h)", flags.TSDBMaxTime, flags.TSDBMinTime)
 	}
 
 	return &Shipper{

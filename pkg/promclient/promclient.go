@@ -29,11 +29,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-var FlagsVersion *version.Version
-
-func init() {
-	FlagsVersion, _ = version.NewVersion("2.2.0")
-}
+var FlagsVersion = version.Must(version.NewVersion("2.2.0"))
 
 // IsWALFileAccesible returns no error if WAL dir can be found. This helps to tell
 // if we have access to Prometheus TSDB directory.
