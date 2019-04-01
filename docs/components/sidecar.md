@@ -13,7 +13,14 @@ Prometheus servers connected to the Thanos cluster via the sidecar are subject t
 The retention is recommended to not be lower than three times the block duration. This achieves resilience in the face of connectivity issues
 to the object storage since all local data will remain available within the Thanos cluster. If connectivity gets restored the backlog of blocks gets uploaded to the object storage.
 
+```console
+$ prometheus \
+  --storage.tsdb.max-block-duration=2h \
+  --storage.tsdb.min-block-duration=2h \
+  --web.enable-lifecycle
 ```
+
+```console
 $ thanos sidecar \
     --tsdb.path        "/path/to/prometheus/data/dir" \
     --prometheus.url   "http://localhost:9090" \
@@ -52,6 +59,8 @@ Flags:
                                  If 0 no trace will be sent periodically, unless
                                  forced by baggage item. See
                                  `pkg/tracing/tracing.go` for details.
+      --http-address="0.0.0.0:10902"
+                                 Listen host:port for HTTP endpoints.
       --grpc-address="0.0.0.0:10901"
                                  Listen ip:port address for gRPC endpoints
                                  (StoreAPI). Make sure this address is routable
@@ -72,6 +81,10 @@ Flags:
                                  verification on server side. (tls.NoClientCert)
       --http-address="0.0.0.0:10902"
                                  Listen host:port for HTTP endpoints.
+      --grpc-advertise-address=GRPC-ADVERTISE-ADDRESS
+                                 Explicit (external) host:port address to
+                                 advertise for gRPC StoreAPI in gossip cluster.
+                                 If empty, 'grpc-address' will be used.
       --cluster.address="0.0.0.0:10900"
                                  Listen ip:port address for gossip cluster.
       --cluster.advertise-address=CLUSTER.ADVERTISE-ADDRESS
@@ -135,4 +148,4 @@ Thanos can watch changes in Prometheus configuration and refresh Prometheus conf
 
 You can configure watching for changes in directory via `--reloader.rule-dir=DIR_NAME` flag.
 
-Thanos sidecar can watch `--reloader.config-file=CONFIG_FILE` configuration file, evalute environment variables found in there and produce generated config in `--reloader.config-envsubst-file=OUT_CONFIG_FILE` file.
+Thanos sidecar can watch `--reloader.config-file=CONFIG_FILE` configuration file, evaluate environment variables found in there and produce generated config in `--reloader.config-envsubst-file=OUT_CONFIG_FILE` file.
