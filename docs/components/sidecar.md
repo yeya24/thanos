@@ -79,8 +79,6 @@ Flags:
                                  Explicit (external) host:port address to
                                  advertise for gRPC StoreAPI in gossip cluster.
                                  If empty, 'grpc-address' will be used.
-      --http-address="0.0.0.0:10902"
-                                 Listen host:port for HTTP endpoints.
       --cluster.address="0.0.0.0:10900"
                                  Listen ip:port address for gossip cluster.
       --cluster.advertise-address=CLUSTER.ADVERTISE-ADDRESS
