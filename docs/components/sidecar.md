@@ -58,10 +58,6 @@ Flags:
                                  from other components if you use gossip,
                                  'grpc-advertise-address' is empty and you
                                  require cross-node connection.
-      --grpc-advertise-address=GRPC-ADVERTISE-ADDRESS
-                                 Explicit (external) host:port address to
-                                 advertise for gRPC StoreAPI in gossip cluster.
-                                 If empty, 'grpc-address' will be used.
       --grpc-server-tls-cert=""  TLS Certificate for gRPC server, leave blank to
                                  disable TLS
       --grpc-server-tls-key=""   TLS Key for the gRPC server, leave blank to
@@ -70,8 +66,6 @@ Flags:
                                  TLS CA to verify clients against. If no client
                                  CA is specified, there is no client
                                  verification on server side. (tls.NoClientCert)
-      --http-address="0.0.0.0:10902"
-                                 Listen host:port for HTTP endpoints.
       --cluster.address="0.0.0.0:10900"
                                  Listen ip:port address for gossip cluster.
       --cluster.advertise-address=CLUSTER.ADVERTISE-ADDRESS
