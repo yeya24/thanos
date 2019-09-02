@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/thanos-io/thanos/pkg/tracing/jaeger"
+	"github.com/thanos-io/thanos/pkg/tracing/skywalking"
 	"github.com/thanos-io/thanos/pkg/tracing/stackdriver"
 
 	"github.com/go-kit/kit/log"
@@ -21,6 +22,7 @@ type TracingProvider string
 const (
 	STACKDRIVER TracingProvider = "STACKDRIVER"
 	JAEGER      TracingProvider = "JAEGER"
+	SKYWALKING TracingProvider = "SKYWALKING"
 )
 
 type TracingConfig struct {
@@ -50,6 +52,8 @@ func NewTracer(ctx context.Context, logger log.Logger, metrics *prometheus.Regis
 		return stackdriver.NewTracer(ctx, logger, config)
 	case string(JAEGER):
 		return jaeger.NewTracer(ctx, logger, metrics, config)
+	case string(SKYWALKING):
+		return skywalking.NewTracer(ctx, logger, config)
 	default:
 		return nil, nil, errors.Errorf("tracing with type %s is not supported", tracingConf.Type)
 	}
