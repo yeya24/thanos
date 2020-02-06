@@ -1044,6 +1044,132 @@ func benchmarkExpandedPostings(
 	}
 }
 
+func TestExpandedPostings(t *testing.T) {
+	n1 := labels.MustNewMatcher(labels.MatchEqual, "n", "1"+postingsBenchSuffix)
+
+	jFoo := labels.MustNewMatcher(labels.MatchEqual, "j", "foo")
+	jNotFoo := labels.MustNewMatcher(labels.MatchNotEqual, "j", "foo")
+
+	iStar := labels.MustNewMatcher(labels.MatchRegexp, "i", "^.*$")
+	iPlus := labels.MustNewMatcher(labels.MatchRegexp, "i", "^.+$")
+	i1Plus := labels.MustNewMatcher(labels.MatchRegexp, "i", "^1.+$")
+	iEmptyRe := labels.MustNewMatcher(labels.MatchRegexp, "i", "^$")
+	iNotEmpty := labels.MustNewMatcher(labels.MatchNotEqual, "i", "")
+	iNot2 := labels.MustNewMatcher(labels.MatchNotEqual, "n", "2"+postingsBenchSuffix)
+	iNot2Star := labels.MustNewMatcher(labels.MatchNotRegexp, "i", "^2.*$")
+
+	tb := testutil.NewTB(t)
+
+	tmpDir, err := ioutil.TempDir("", "test-expanded-postings")
+	testutil.Ok(tb, err)
+	defer func() { testutil.Ok(tb, os.RemoveAll(tmpDir)) }()
+
+	bkt, err := filesystem.NewBucket(filepath.Join(tmpDir, "bkt"))
+	testutil.Ok(tb, err)
+	defer func() { testutil.Ok(tb, bkt.Close()) }()
+
+	id := uploadTestBlock(tb, tmpDir, bkt)
+
+	cases := []struct {
+		name     string
+		matchers []*labels.Matcher
+
+		expectedLen int
+	}{
+		{`n="1"`, []*labels.Matcher{n1}, 200000},
+		{`n="1",j="foo"`, []*labels.Matcher{n1, jFoo}, 100000},
+		{`j="foo",n="1"`, []*labels.Matcher{jFoo, n1}, 100000},
+		{`n="1",j!="foo"`, []*labels.Matcher{n1, jNotFoo}, 100000},
+		{`i=~".*"`, []*labels.Matcher{iStar}, 5000000},
+		{`i=~".+"`, []*labels.Matcher{iPlus}, 5000000},
+		{`i=~""`, []*labels.Matcher{iEmptyRe}, 0},
+		{`i!=""`, []*labels.Matcher{iNotEmpty}, 5000000},
+		{`n="1",i=~".*",j="foo"`, []*labels.Matcher{n1, iStar, jFoo}, 100000},
+		{`n="1",i=~".*",i!="2",j="foo"`, []*labels.Matcher{n1, iStar, iNot2, jFoo}, 100000},
+		{`n="1",i!=""`, []*labels.Matcher{n1, iNotEmpty}, 200000},
+		{`n="1",i!="",j="foo"`, []*labels.Matcher{n1, iNotEmpty, jFoo}, 100000},
+		{`n="1",i=~".+",j="foo"`, []*labels.Matcher{n1, iPlus, jFoo}, 100000},
+		{`n="1",i=~"1.+",j="foo"`, []*labels.Matcher{n1, i1Plus, jFoo}, 11111},
+		{`n="1",i=~".+",i!="2",j="foo"`, []*labels.Matcher{n1, iPlus, iNot2, jFoo}, 100000},
+		{`n="1",i=~".+",i!~"2.*",j="foo"`, []*labels.Matcher{n1, iPlus, iNot2Star, jFoo}, 88889},
+	}
+
+	r, err := indexheader.NewBinaryReader(context.Background(), log.NewNopLogger(), bkt, tmpDir, id)
+	testutil.Ok(tb, err)
+
+	for _, c := range cases {
+		b := &bucketBlock{
+			logger:            log.NewNopLogger(),
+			indexHeaderReader: r,
+			indexCache:        noopCache{},
+			bkt:               bkt,
+			meta:              &metadata.Meta{BlockMeta: tsdb.BlockMeta{ULID: id}},
+			partitioner:       gapBasedPartitioner{maxGapSize: partitionerMaxGapSize},
+		}
+
+		indexr := newBucketIndexReader(context.Background(), b)
+
+		p, err := indexr.ExpandedPostings(c.matchers)
+		testutil.Ok(t, err)
+		testutil.Equals(t, c.expectedLen, len(p))
+	}
+}
+
+func TestFindSegMatch(t *testing.T) {
+	cases := []struct {
+		pattern string
+		exp     []string
+	}{
+		// Simple sets.
+		{
+			pattern: "^(?:foo|bar|baz)$",
+			exp: []string{
+				"foo",
+				"bar",
+				"baz",
+			},
+		},
+		// Simple sets containing escaped characters.
+		{
+			pattern: "^(?:fo\\.o|bar\\?|\\^baz)$",
+			exp: []string{
+				"fo.o",
+				"bar?",
+				"^baz",
+			},
+		},
+		// Simple sets containing special characters without escaping.
+		{
+			pattern: "^(?:fo.o|bar?|^baz)$",
+			exp:     nil,
+		},
+		// Missing wrapper.
+		{
+			pattern: "foo|bar|baz",
+			exp:     nil,
+		},
+	}
+
+	for _, c := range cases {
+		matches := findSetMatches(c.pattern)
+		if len(c.exp) == 0 {
+			if len(matches) != 0 {
+				t.Errorf("Evaluating %s, unexpected result %v", c.pattern, matches)
+			}
+		} else {
+			if len(matches) != len(c.exp) {
+				t.Errorf("Evaluating %s, length of result not equal to exp", c.pattern)
+			} else {
+				for i := 0; i < len(c.exp); i++ {
+					if c.exp[i] != matches[i] {
+						t.Errorf("Evaluating %s, unexpected result %s", c.pattern, matches[i])
+					}
+				}
+			}
+		}
+	}
+}
+
 func newSeries(t testing.TB, lset labels.Labels, smplChunks [][]sample) storepb.Series {
 	var s storepb.Series
 
