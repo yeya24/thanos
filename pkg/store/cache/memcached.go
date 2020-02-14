@@ -5,6 +5,7 @@ package storecache
 
 import (
 	"context"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"time"
 
 	"github.com/go-kit/kit/log"
@@ -30,29 +31,25 @@ type MemcachedIndexCache struct {
 }
 
 // NewMemcachedIndexCache makes a new MemcachedIndexCache.
-func NewMemcachedIndexCache(logger log.Logger, memcached cacheutil.MemcachedClient, reg prometheus.Registerer) (*MemcachedIndexCache, error) {
+func NewMemcachedIndexCache(logger log.Logger, memcached cacheutil.MemcachedClient, reg *promauto.Factory) (*MemcachedIndexCache, error) {
 	c := &MemcachedIndexCache{
 		logger:    logger,
 		memcached: memcached,
 	}
 
-	c.requests = prometheus.NewCounterVec(prometheus.CounterOpts{
+	c.requests = reg.NewCounterVec(prometheus.CounterOpts{
 		Name: "thanos_store_index_cache_requests_total",
 		Help: "Total number of items requests to the cache.",
 	}, []string{"item_type"})
 	c.requests.WithLabelValues(cacheTypePostings)
 	c.requests.WithLabelValues(cacheTypeSeries)
 
-	c.hits = prometheus.NewCounterVec(prometheus.CounterOpts{
+	c.hits = reg.NewCounterVec(prometheus.CounterOpts{
 		Name: "thanos_store_index_cache_hits_total",
 		Help: "Total number of items requests to the cache that were a hit.",
 	}, []string{"item_type"})
 	c.hits.WithLabelValues(cacheTypePostings)
 	c.hits.WithLabelValues(cacheTypeSeries)
-
-	if reg != nil {
-		reg.MustRegister(c.requests, c.hits)
-	}
 
 	level.Info(logger).Log("msg", "created memcached index cache")
 

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"os"
 	"strings"
 	"time"
@@ -89,7 +90,7 @@ func registerReceive(m map[string]setupFunc, app *kingpin.Application) {
 
 		var cw *receive.ConfigWatcher
 		if *hashringsFile != "" {
-			cw, err = receive.NewConfigWatcher(log.With(logger, "component", "config-watcher"), reg, *hashringsFile, *refreshInterval)
+			cw, err = receive.NewConfigWatcher(log.With(logger, "component", "config-watcher"), promauto.With(reg), *hashringsFile, *refreshInterval)
 			if err != nil {
 				return err
 			}

@@ -8,6 +8,7 @@ package shipper
 import (
 	"context"
 	"encoding/json"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"io/ioutil"
 	"math"
 	"os"
@@ -37,41 +38,33 @@ type metrics struct {
 	uploadedCompacted prometheus.Gauge
 }
 
-func newMetrics(r prometheus.Registerer, uploadCompacted bool) *metrics {
+func newMetrics(r promauto.Factory, uploadCompacted bool) *metrics {
 	var m metrics
 
-	m.dirSyncs = prometheus.NewCounter(prometheus.CounterOpts{
+	m.dirSyncs = r.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_shipper_dir_syncs_total",
 		Help: "Total number of dir syncs",
 	})
-	m.dirSyncFailures = prometheus.NewCounter(prometheus.CounterOpts{
+	m.dirSyncFailures = r.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_shipper_dir_sync_failures_total",
 		Help: "Total number of failed dir syncs",
 	})
-	m.uploads = prometheus.NewCounter(prometheus.CounterOpts{
+	m.uploads = r.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_shipper_uploads_total",
 		Help: "Total number of uploaded blocks",
 	})
-	m.uploadFailures = prometheus.NewCounter(prometheus.CounterOpts{
+	m.uploadFailures = r.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_shipper_upload_failures_total",
 		Help: "Total number of block upload failures",
 	})
-	m.uploadedCompacted = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "thanos_shipper_upload_compacted_done",
-		Help: "If 1 it means shipper uploaded all compacted blocks from the filesystem.",
-	})
 
-	if r != nil {
-		r.MustRegister(
-			m.dirSyncs,
-			m.dirSyncFailures,
-			m.uploads,
-			m.uploadFailures,
-		)
-		if uploadCompacted {
-			r.MustRegister(m.uploadedCompacted)
-		}
+	if uploadCompacted {
+		m.uploadedCompacted = r.NewGauge(prometheus.GaugeOpts{
+			Name: "thanos_shipper_upload_compacted_done",
+			Help: "If 1 it means shipper uploaded all compacted blocks from the filesystem.",
+		})
 	}
+
 	return &m
 }
 

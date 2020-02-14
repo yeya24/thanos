@@ -5,6 +5,7 @@ package storecache
 
 import (
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"strings"
 
 	"github.com/go-kit/kit/log"
@@ -29,7 +30,7 @@ type IndexCacheConfig struct {
 }
 
 // NewIndexCache initializes and returns new index cache.
-func NewIndexCache(logger log.Logger, confContentYaml []byte, reg prometheus.Registerer) (IndexCache, error) {
+func NewIndexCache(logger log.Logger, confContentYaml []byte, reg *promauto.Factory) (IndexCache, error) {
 	level.Info(logger).Log("msg", "loading index cache configuration")
 	cacheConfig := &IndexCacheConfig{}
 	if err := yaml.UnmarshalStrict(confContentYaml, cacheConfig); err != nil {

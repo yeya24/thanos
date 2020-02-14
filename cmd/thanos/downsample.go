@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"os"
 	"path/filepath"
 	"time"
@@ -54,20 +55,17 @@ type DownsampleMetrics struct {
 	downsampleFailures *prometheus.CounterVec
 }
 
-func newDownsampleMetrics(reg *prometheus.Registry) *DownsampleMetrics {
+func newDownsampleMetrics(reg *promauto.Factory) *DownsampleMetrics {
 	m := new(DownsampleMetrics)
 
-	m.downsamples = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.downsamples = reg.NewCounterVec(prometheus.CounterOpts{
 		Name: "thanos_compact_downsample_total",
 		Help: "Total number of downsampling attempts.",
 	}, []string{"group"})
-	m.downsampleFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
+	m.downsampleFailures = reg.NewCounterVec(prometheus.CounterOpts{
 		Name: "thanos_compact_downsample_failures_total",
 		Help: "Total number of failed downsampling attempts.",
 	}, []string{"group"})
-
-	reg.MustRegister(m.downsamples)
-	reg.MustRegister(m.downsampleFailures)
 
 	return m
 }
@@ -110,7 +108,7 @@ func runDownsample(
 		prober.NewInstrumentation(comp, logger, prometheus.WrapRegistererWithPrefix("thanos_", reg)),
 	)
 
-	metrics := newDownsampleMetrics(reg)
+	metrics := newDownsampleMetrics()
 	// Start cycle of syncing blocks from the bucket and garbage collecting the bucket.
 	{
 		ctx, cancel := context.WithCancel(context.Background())

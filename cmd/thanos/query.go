@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"math"
 	"net/http"
 	"path"
@@ -202,12 +203,12 @@ func runQuery(
 	instantDefaultMaxSourceResolution time.Duration,
 	comp component.Component,
 ) error {
+	factory := promauto.With(reg)
 	// TODO(bplotka in PR #513 review): Move arguments into struct.
-	duplicatedStores := prometheus.NewCounter(prometheus.CounterOpts{
+	duplicatedStores := factory.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_query_duplicated_store_addresses_total",
 		Help: "The number of times a duplicated store addresses is detected from the different configs in query",
 	})
-	reg.MustRegister(duplicatedStores)
 
 	dialOpts, err := extgrpc.StoreClientGRPCOpts(logger, reg, tracer, secure, cert, key, caCert, serverName)
 	if err != nil {
@@ -217,7 +218,7 @@ func runQuery(
 	fileSDCache := cache.New()
 	dnsProvider := dns.NewProvider(
 		logger,
-		extprom.WrapRegistererWithPrefix("thanos_querier_store_apis_", reg),
+		promauto.With(extprom.WrapRegistererWithPrefix("thanos_querier_store_apis_", reg)),
 		dns.ResolverType(dnsSDResolver),
 	)
 
@@ -337,7 +338,7 @@ func runQuery(
 			"web.prefix-header":   webPrefixHeaderName,
 		}
 
-		ins := extpromhttp.NewInstrumentationMiddleware(reg)
+		ins := extpromhttp.NewInstrumentationMiddleware(&factory)
 		ui.NewQueryUI(logger, reg, stores, flagsMap).Register(router.WithPrefix(webRoutePrefix), ins)
 
 		api := v1.NewAPI(logger, reg, engine, queryableCreator, enableAutodownsampling, enablePartialResponse, replicaLabels, instantDefaultMaxSourceResolution)

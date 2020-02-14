@@ -4,6 +4,7 @@
 package http
 
 import (
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"net/http"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -38,9 +39,9 @@ type defaultInstrumentationMiddleware struct {
 }
 
 // NewInstrumentationMiddleware provides default InstrumentationMiddleware.
-func NewInstrumentationMiddleware(reg prometheus.Registerer) InstrumentationMiddleware {
+func NewInstrumentationMiddleware(reg *promauto.Factory) InstrumentationMiddleware {
 	ins := defaultInstrumentationMiddleware{
-		requestDuration: prometheus.NewHistogramVec(
+		requestDuration: reg.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Name:    "http_request_duration_seconds",
 				Help:    "Tracks the latencies for HTTP requests.",
@@ -49,7 +50,7 @@ func NewInstrumentationMiddleware(reg prometheus.Registerer) InstrumentationMidd
 			[]string{"code", "handler", "method"},
 		),
 
-		requestSize: prometheus.NewSummaryVec(
+		requestSize: reg.NewSummaryVec(
 			prometheus.SummaryOpts{
 				Name: "http_request_size_bytes",
 				Help: "Tracks the size of HTTP requests.",
@@ -57,14 +58,14 @@ func NewInstrumentationMiddleware(reg prometheus.Registerer) InstrumentationMidd
 			[]string{"code", "handler", "method"},
 		),
 
-		requestsTotal: prometheus.NewCounterVec(
+		requestsTotal: reg.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "http_requests_total",
 				Help: "Tracks the number of HTTP requests.",
 			}, []string{"code", "handler", "method"},
 		),
 
-		responseSize: prometheus.NewSummaryVec(
+		responseSize: reg.NewSummaryVec(
 			prometheus.SummaryOpts{
 				Name: "http_response_size_bytes",
 				Help: "Tracks the size of HTTP responses.",
@@ -72,7 +73,6 @@ func NewInstrumentationMiddleware(reg prometheus.Registerer) InstrumentationMidd
 			[]string{"code", "handler", "method"},
 		),
 	}
-	reg.MustRegister(ins.requestDuration, ins.requestSize, ins.requestsTotal, ins.responseSize)
 	return &ins
 }
 

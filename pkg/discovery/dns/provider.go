@@ -5,6 +5,7 @@ package dns
 
 import (
 	"context"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"net"
 	"strings"
 	"sync"
@@ -51,29 +52,23 @@ func (t ResolverType) ToResolver(logger log.Logger) ipLookupResolver {
 
 // NewProvider returns a new empty provider with a given resolver type.
 // If empty resolver type is net.DefaultResolver.w
-func NewProvider(logger log.Logger, reg prometheus.Registerer, resolverType ResolverType) *Provider {
+func NewProvider(logger log.Logger, reg promauto.Factory, resolverType ResolverType) *Provider {
 	p := &Provider{
 		resolver: NewResolver(resolverType.ToResolver(logger)),
 		resolved: make(map[string][]string),
 		logger:   logger,
-		resolverAddrs: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		resolverAddrs: reg.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "dns_provider_results",
 			Help: "The number of resolved endpoints for each configured address",
 		}, []string{"addr"}),
-		resolverLookupsCount: prometheus.NewCounter(prometheus.CounterOpts{
+		resolverLookupsCount: reg.NewCounter(prometheus.CounterOpts{
 			Name: "dns_lookups_total",
 			Help: "The number of DNS lookups resolutions attempts",
 		}),
-		resolverFailuresCount: prometheus.NewCounter(prometheus.CounterOpts{
+		resolverFailuresCount: reg.NewCounter(prometheus.CounterOpts{
 			Name: "dns_failures_total",
 			Help: "The number of DNS lookup failures",
 		}),
-	}
-
-	if reg != nil {
-		reg.MustRegister(p.resolverAddrs)
-		reg.MustRegister(p.resolverLookupsCount)
-		reg.MustRegister(p.resolverFailuresCount)
 	}
 
 	return p

@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"os"
 	"path"
 	"path/filepath"
@@ -171,32 +172,32 @@ func runCompact(
 	concurrency int,
 	selectorRelabelConf *extflag.PathOrContent,
 ) error {
-	halted := prometheus.NewGauge(prometheus.GaugeOpts{
+	factory := promauto.With(reg)
+	halted := factory.NewGauge(prometheus.GaugeOpts{
 		Name: "thanos_compactor_halted",
 		Help: "Set to 1 if the compactor halted due to an unexpected error.",
 	})
 	halted.Set(0)
-	retried := prometheus.NewCounter(prometheus.CounterOpts{
+	retried := factory.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_compactor_retries_total",
 		Help: "Total number of retries after retriable compactor error.",
 	})
-	iterations := prometheus.NewCounter(prometheus.CounterOpts{
+	iterations := factory.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_compactor_iterations_total",
 		Help: "Total number of iterations that were executed successfully.",
 	})
-	consistencyDelayMetric := prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+	factory.NewGaugeFunc(prometheus.GaugeOpts{
 		Name: "thanos_consistency_delay_seconds",
 		Help: "Configured consistency delay in seconds.",
 	}, func() float64 {
 		return consistencyDelay.Seconds()
 	})
-	partialUploadDeleteAttempts := prometheus.NewCounter(prometheus.CounterOpts{
+	partialUploadDeleteAttempts := factory.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_compactor_aborted_partial_uploads_deletion_attempts_total",
 		Help: "Total number of started deletions of blocks that are assumed aborted and only partially uploaded.",
 	})
-	reg.MustRegister(halted, retried, iterations, consistencyDelayMetric, partialUploadDeleteAttempts)
 
-	downsampleMetrics := newDownsampleMetrics(reg)
+	downsampleMetrics := newDownsampleMetrics(&factory)
 
 	httpProbe := prober.NewHTTP()
 	statusProber := prober.Combine(

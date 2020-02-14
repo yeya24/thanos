@@ -7,6 +7,7 @@ import (
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/thanos-io/thanos/pkg/component"
 )
@@ -26,21 +27,17 @@ type InstrumentationProbe struct {
 }
 
 // NewInstrumentation returns InstrumentationProbe records readiness and healthiness for given component.
-func NewInstrumentation(component component.Component, logger log.Logger, reg prometheus.Registerer) *InstrumentationProbe {
+func NewInstrumentation(component component.Component, logger log.Logger, reg *promauto.Factory) *InstrumentationProbe {
 	p := InstrumentationProbe{
 		component: component,
 		logger:    logger,
-		status: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		status: reg.NewGaugeVec(prometheus.GaugeOpts{
 			Name:        "status",
 			Help:        "Represents status (0 indicates success, 1 indicates failure) of the component.",
 			ConstLabels: map[string]string{"component": component.String()},
 		},
 			[]string{"check"},
 		),
-	}
-
-	if reg != nil {
-		reg.MustRegister(p.status)
 	}
 
 	return &p

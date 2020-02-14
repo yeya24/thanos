@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"io/ioutil"
 	stdlog "log"
 	"net"
@@ -84,13 +85,14 @@ func NewHandler(logger log.Logger, o *Options) *Handler {
 		logger = log.NewNopLogger()
 	}
 
+	factory := promauto.With(o.Registry)
 	h := &Handler{
 		logger:  logger,
 		writer:  o.Writer,
 		router:  route.New(),
 		options: o,
 		peers:   newPeerGroup(o.DialOpts...),
-		forwardRequestsTotal: prometheus.NewCounterVec(
+		forwardRequestsTotal: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "thanos_receive_forward_requests_total",
 				Help: "The number of forward requests.",
@@ -101,7 +103,6 @@ func NewHandler(logger log.Logger, o *Options) *Handler {
 	ins := extpromhttp.NewNopInstrumentationMiddleware()
 	if o.Registry != nil {
 		ins = extpromhttp.NewInstrumentationMiddleware(o.Registry)
-		o.Registry.MustRegister(h.forwardRequestsTotal)
 	}
 
 	readyf := h.testReady

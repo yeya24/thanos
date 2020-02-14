@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"math"
 	"net/http"
 	"net/url"
@@ -146,6 +147,7 @@ func runSidecar(
 		limitMinTime: limitMinTime,
 	}
 
+	factory := promauto.With(reg)
 	confContentYaml, err := objStoreConfig.Content()
 	if err != nil {
 		return errors.Wrap(err, "getting object store config")
@@ -183,15 +185,14 @@ func runSidecar(
 
 	// Setup all the concurrent groups.
 	{
-		promUp := prometheus.NewGauge(prometheus.GaugeOpts{
+		promUp := factory.NewGauge(prometheus.GaugeOpts{
 			Name: "thanos_sidecar_prometheus_up",
 			Help: "Boolean indicator whether the sidecar can reach its Prometheus peer.",
 		})
-		lastHeartbeat := prometheus.NewGauge(prometheus.GaugeOpts{
+		lastHeartbeat := factory.NewGauge(prometheus.GaugeOpts{
 			Name: "thanos_sidecar_last_heartbeat_success_time_seconds",
 			Help: "Second timestamp of the last successful heartbeat.",
 		})
-		reg.MustRegister(promUp, lastHeartbeat)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		g.Add(func() error {

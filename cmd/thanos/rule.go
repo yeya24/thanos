@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -240,26 +241,27 @@ func runRule(
 	dnsSDResolver string,
 	comp component.Component,
 ) error {
-	configSuccess := prometheus.NewGauge(prometheus.GaugeOpts{
+	factory := promauto.With(reg)
+	configSuccess := factory.NewGauge(prometheus.GaugeOpts{
 		Name: "thanos_rule_config_last_reload_successful",
 		Help: "Whether the last configuration reload attempt was successful.",
 	})
-	configSuccessTime := prometheus.NewGauge(prometheus.GaugeOpts{
+	configSuccessTime := factory.NewGauge(prometheus.GaugeOpts{
 		Name: "thanos_rule_config_last_reload_success_timestamp_seconds",
 		Help: "Timestamp of the last successful configuration reload.",
 	})
-	duplicatedQuery := prometheus.NewCounter(prometheus.CounterOpts{
+	duplicatedQuery := factory.NewCounter(prometheus.CounterOpts{
 		Name: "thanos_rule_duplicated_query_addresses_total",
 		Help: "The number of times a duplicated query addresses is detected from the different configs in rule",
 	})
-	rulesLoaded := prometheus.NewGaugeVec(
+	rulesLoaded := factory.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "thanos_rule_loaded_rules",
 			Help: "Loaded rules partitioned by file and group",
 		},
 		[]string{"strategy", "file", "group"},
 	)
-	ruleEvalWarnings := prometheus.NewCounterVec(
+	ruleEvalWarnings := factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "thanos_rule_evaluation_with_warnings_total",
 			Help: "The total number of rule evaluation that were successful but had warnings which can indicate partial error.",
@@ -267,12 +269,6 @@ func runRule(
 	)
 	ruleEvalWarnings.WithLabelValues(strings.ToLower(storepb.PartialResponseStrategy_ABORT.String()))
 	ruleEvalWarnings.WithLabelValues(strings.ToLower(storepb.PartialResponseStrategy_WARN.String()))
-
-	reg.MustRegister(configSuccess)
-	reg.MustRegister(configSuccessTime)
-	reg.MustRegister(duplicatedQuery)
-	reg.MustRegister(rulesLoaded)
-	reg.MustRegister(ruleEvalWarnings)
 
 	var queryCfg []query.Config
 	if len(queryConfigYAML) > 0 {
@@ -309,7 +305,7 @@ func runRule(
 
 	queryProvider := dns.NewProvider(
 		logger,
-		extprom.WrapRegistererWithPrefix("thanos_ruler_query_apis_", reg),
+		promauto.With(extprom.WrapRegistererWithPrefix("thanos_ruler_query_apis_", reg)),
 		dns.ResolverType(dnsSDResolver),
 	)
 	var queryClients []*http_util.Client
@@ -366,7 +362,7 @@ func runRule(
 
 	amProvider := dns.NewProvider(
 		logger,
-		extprom.WrapRegistererWithPrefix("thanos_ruler_alertmanagers_", reg),
+		promauto.With(extprom.WrapRegistererWithPrefix("thanos_ruler_alertmanagers_", reg)),
 		dns.ResolverType(dnsSDResolver),
 	)
 	var alertmgrs []*alert.Alertmanager
