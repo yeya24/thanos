@@ -505,4 +505,3 @@ $(PROMTOOL):
 
 $(FUNCBENCH):
 	go get -v github.com/prometheus/test-infra/funcbench@00aa9cfb81136704261a436e3025463f0818a57b
-	#$(call fetch_go_bin_version_mod,github.com/prometheus/test-infra/funcbench,$(FUNCBENCH_VERSION))
