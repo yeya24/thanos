@@ -504,4 +504,4 @@ $(PROMTOOL):
 	$(call fetch_go_bin_version,github.com/prometheus/prometheus/cmd/promtool,$(PROMTOOL_VERSION))
 
 $(FUNCBENCH):
-	go get -v github.com/prometheus/test-infra/funcbench@00aa9cfb81136704261a436e3025463f0818a57b
+	GO111MODULE='off' go get -v github.com/prometheus/test-infra/funcbench@00aa9cfb81136704261a436e3025463f0818a57b
