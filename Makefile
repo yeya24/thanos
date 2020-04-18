@@ -504,4 +504,4 @@ $(PROMTOOL):
 	$(call fetch_go_bin_version,github.com/prometheus/prometheus/cmd/promtool,$(PROMTOOL_VERSION))
 
 $(FUNCBENCH):
-	$(call fetch_go_bin_version_mod,github.com/prometheus/test-infra/funcbench,$(FUNCBENCH_VERSION))
+	$(call fetch_go_bin_version,github.com/prometheus/test-infra/funcbench,$(FUNCBENCH_VERSION))
