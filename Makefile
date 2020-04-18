@@ -51,7 +51,7 @@ JSONNET_BUNDLER         ?= $(GOBIN)/jb-$(JSONNET_BUNDLER_VERSION)
 PROMTOOL_VERSION        ?= edeb7a44cbf745f1d8be4ea6f215e79e651bfe19
 PROMTOOL                ?= $(GOBIN)/promtool-$(PROMTOOL_VERSION)
 FUNCBENCH_VERSION       ?= 00aa9cfb81136704261a436e3025463f0818a57b
-FUNCBENCH               ?= $(GOBIN)/funcbench-$(FUNCBENCH_VERSION)
+FUNCBENCH               ?= $(GOBIN)/funcbench
 THANOS_BENCH_FUNC		?="*"
 
 # Support gsed on OSX (installed via brew), falling back to sed. On Linux
