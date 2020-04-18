@@ -845,6 +845,188 @@ func debugFoundBlockSetOverview(logger log.Logger, mint, maxt, maxResolutionMill
 }
 
 // Series implements the storepb.StoreServer interface.
+func (s *BucketStore) Series1(req *storepb.SeriesRequest, srv storepb.Store_SeriesServer) (err error) {
+	tracing.DoInSpan(srv.Context(), "store_query_gate_ismyturn", func(ctx context.Context) {
+		err = s.queryGate.IsMyTurn(srv.Context())
+	})
+	if err != nil {
+		return errors.Wrapf(err, "failed to wait for turn")
+	}
+
+	defer s.queryGate.Done()
+
+	matchers, err := translateMatchers(req.Matchers)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	req.MinTime = s.limitMinTime(req.MinTime)
+	req.MaxTime = s.limitMaxTime(req.MaxTime)
+
+	var (
+		ctx     = srv.Context()
+		stats   = &queryStats{}
+		res     []storepb.SeriesSet
+		mtx     sync.Mutex
+		g, gctx = errgroup.WithContext(ctx)
+	)
+
+	s.mtx.RLock()
+
+	for _, bs := range s.blockSets {
+		blockMatchers, ok := bs.labelMatchers(matchers...)
+		if !ok {
+			continue
+		}
+
+		blocks := bs.getFor(req.MinTime, req.MaxTime, req.MaxResolutionWindow)
+
+		mtx.Lock()
+		stats.blocksQueried += len(blocks)
+		mtx.Unlock()
+
+		if s.debugLogging {
+			debugFoundBlockSetOverview(s.logger, req.MinTime, req.MaxTime, req.MaxResolutionWindow, bs.labels, blocks)
+		}
+
+		for _, b := range blocks {
+			b := b
+
+			// We must keep the readers open until all their data has been sent.
+			indexr := b.indexReader(gctx)
+			chunkr := b.chunkReader(gctx)
+
+			// Defer all closes to the end of Series method.
+			defer runutil.CloseWithLogOnErr(s.logger, indexr, "series block")
+			defer runutil.CloseWithLogOnErr(s.logger, chunkr, "series block")
+
+			g.Go(func() error {
+				part, pstats, err := blockSeries(
+					b.meta.Thanos.Labels,
+					indexr,
+					chunkr,
+					blockMatchers,
+					req,
+					s.samplesLimiter,
+				)
+				if err != nil {
+					return errors.Wrapf(err, "fetch series for block %s", b.meta.ULID)
+				}
+
+				mtx.Lock()
+				res = append(res, part)
+				stats = stats.merge(pstats)
+				mtx.Unlock()
+
+				return nil
+			})
+		}
+	}
+
+	s.mtx.RUnlock()
+
+	defer func() {
+		s.metrics.seriesDataTouched.WithLabelValues("postings").Observe(float64(stats.postingsTouched))
+		s.metrics.seriesDataFetched.WithLabelValues("postings").Observe(float64(stats.postingsFetched))
+		s.metrics.seriesDataSizeTouched.WithLabelValues("postings").Observe(float64(stats.postingsTouchedSizeSum))
+		s.metrics.seriesDataSizeFetched.WithLabelValues("postings").Observe(float64(stats.postingsFetchedSizeSum))
+		s.metrics.seriesDataTouched.WithLabelValues("series").Observe(float64(stats.seriesTouched))
+		s.metrics.seriesDataFetched.WithLabelValues("series").Observe(float64(stats.seriesFetched))
+		s.metrics.seriesDataSizeTouched.WithLabelValues("series").Observe(float64(stats.seriesTouchedSizeSum))
+		s.metrics.seriesDataSizeFetched.WithLabelValues("series").Observe(float64(stats.seriesFetchedSizeSum))
+		s.metrics.seriesDataTouched.WithLabelValues("chunks").Observe(float64(stats.chunksTouched))
+		s.metrics.seriesDataFetched.WithLabelValues("chunks").Observe(float64(stats.chunksFetched))
+		s.metrics.seriesDataSizeTouched.WithLabelValues("chunks").Observe(float64(stats.chunksTouchedSizeSum))
+		s.metrics.seriesDataSizeFetched.WithLabelValues("chunks").Observe(float64(stats.chunksFetchedSizeSum))
+		s.metrics.resultSeriesCount.Observe(float64(stats.mergedSeriesCount))
+		s.metrics.cachedPostingsCompressions.WithLabelValues("encode").Add(float64(stats.cachedPostingsCompressions))
+		s.metrics.cachedPostingsCompressions.WithLabelValues("decode").Add(float64(stats.cachedPostingsDecompressions))
+		s.metrics.cachedPostingsCompressionErrors.WithLabelValues("encode").Add(float64(stats.cachedPostingsCompressionErrors))
+		s.metrics.cachedPostingsCompressionErrors.WithLabelValues("decode").Add(float64(stats.cachedPostingsDecompressionErrors))
+		s.metrics.cachedPostingsCompressionTimeSeconds.WithLabelValues("encode").Add(stats.cachedPostingsCompressionTimeSum.Seconds())
+		s.metrics.cachedPostingsCompressionTimeSeconds.WithLabelValues("decode").Add(stats.cachedPostingsDecompressionTimeSum.Seconds())
+		s.metrics.cachedPostingsOriginalSizeBytes.Add(float64(stats.cachedPostingsOriginalSizeSum))
+		s.metrics.cachedPostingsCompressedSizeBytes.Add(float64(stats.cachedPostingsCompressedSizeSum))
+
+		level.Debug(s.logger).Log("msg", "stats query processed",
+			"stats", fmt.Sprintf("%+v", stats), "err", err)
+	}()
+
+	// Concurrently get data from all blocks.
+	{
+		begin := time.Now()
+		tracing.DoInSpan(ctx, "bucket_store_preload_all", func(_ context.Context) {
+			err = g.Wait()
+		})
+		if err != nil {
+			return status.Error(codes.Aborted, err.Error())
+		}
+		stats.getAllDuration = time.Since(begin)
+		s.metrics.seriesGetAllDuration.Observe(stats.getAllDuration.Seconds())
+		s.metrics.seriesBlocksQueried.Observe(float64(stats.blocksQueried))
+	}
+	// Merge the sub-results from each selected block.
+	tracing.DoInSpan(ctx, "bucket_store_merge_all", func(ctx context.Context) {
+		begin := time.Now()
+
+		// Merge series set into an union of all block sets. This exposes all blocks are single seriesSet.
+		// Chunks of returned series might be out of order w.r.t to their time range.
+		// This must be accounted for later by clients.
+		set := storepb.MergeSeriesSets(res...)
+		for set.Next() {
+			var series storepb.Series
+			var chks []storepb.AggrChunk
+
+			stats.mergedSeriesCount++
+
+			if req.SkipChunks {
+				series.Labels, _ = set.At()
+
+				if err = srv.Send(storepb.NewSeriesResponse(&series)); err != nil {
+					err = status.Error(codes.Unknown, errors.Wrap(err, "send series response").Error())
+					return
+				}
+			} else {
+				series.Labels, series.Chunks = set.At()
+
+				stats.mergedChunksCount += len(series.Chunks)
+				s.metrics.chunkSizeBytes.Observe(float64(chunksSize(series.Chunks)))
+
+				lblsSize := 0
+				for _, lbl := range series.Labels {
+					lblsSize += lbl.Size()
+				}
+
+				for {
+					series.Chunks, chks = splitFrame(series.Chunks, 1024 * 1024 - lblsSize)
+
+					if len(series.Chunks) == 0 {
+						break
+					}
+
+					if err = srv.Send(storepb.NewSeriesResponse(&series)); err != nil {
+						err = status.Error(codes.Unknown, errors.Wrap(err, "send series response").Error())
+						return
+					}
+
+					series.Chunks = chks
+					chks = chks[:0]
+				}
+			}
+
+		}
+		if set.Err() != nil {
+			err = status.Error(codes.Unknown, errors.Wrap(set.Err(), "expand series set").Error())
+			return
+		}
+		stats.mergeDuration = time.Since(begin)
+		s.metrics.seriesMergeDuration.Observe(stats.mergeDuration.Seconds())
+
+		err = nil
+	})
+	return err
+}
+
+// Series implements the storepb.StoreServer interface.
 func (s *BucketStore) Series(req *storepb.SeriesRequest, srv storepb.Store_SeriesServer) (err error) {
 	tracing.DoInSpan(srv.Context(), "store_query_gate_ismyturn", func(ctx context.Context) {
 		err = s.queryGate.IsMyTurn(srv.Context())
@@ -978,7 +1160,7 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, srv storepb.Store_Serie
 			stats.mergedSeriesCount++
 
 			if req.SkipChunks {
-				series.Labels, _ = set.At()
+				series.Labels, series.Chunks = set.At()
 			} else {
 				series.Labels, series.Chunks = set.At()
 
@@ -1008,6 +1190,17 @@ func chunksSize(chks []storepb.AggrChunk) (size int) {
 		size += chk.Size() // This gets the encoded proto size.
 	}
 	return size
+}
+
+func splitFrame(chks []storepb.AggrChunk, frameBytesLeft int) ([]storepb.AggrChunk, []storepb.AggrChunk){
+	for i, chk := range chks {
+		frameBytesLeft -= chk.Size()
+		if frameBytesLeft <= 0 {
+			return chks[:i+1], chks[i+1:]
+		}
+	}
+
+	return chks, nil
 }
 
 // LabelNames implements the storepb.StoreServer interface.
