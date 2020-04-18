@@ -125,7 +125,7 @@ define fetch_go_bin_version_mod
 	@echo ">> installing $(1)@$(2)"
 	@ # Extra step for those who does not vendor deps.
 	@CDPATH='' cd -- '$(TMP_GOPATH)/src/$(1)' && go mod vendor
-	@GOBIN='$(TMP_GOPATH)/bin' GOPATH='$(TMP_GOPATH)' GO111MODULE='off' go install '$(1)'
+	@GOBIN='$(TMP_GOPATH)/bin' GOPATH='$(TMP_GOPATH)' GO111MODULE='on' go install '$(1)'
 	@mv -- '$(TMP_GOPATH)/bin/$(shell basename $(1))' '$(GOBIN)/$(shell basename $(1))-$(2)'
 	@echo ">> produced $(GOBIN)/$(shell basename $(1))-$(2)"
 
@@ -504,4 +504,4 @@ $(PROMTOOL):
 	$(call fetch_go_bin_version,github.com/prometheus/prometheus/cmd/promtool,$(PROMTOOL_VERSION))
 
 $(FUNCBENCH):
-	$(call fetch_go_bin_version,github.com/prometheus/test-infra/funcbench,$(FUNCBENCH_VERSION))
+	$(call fetch_go_bin_version_mod,github.com/prometheus/test-infra/funcbench,$(FUNCBENCH_VERSION))
