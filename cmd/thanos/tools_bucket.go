@@ -75,6 +75,7 @@ func registerBucket(m map[string]setupFunc, app *kingpin.CmdClause, pre string) 
 	registerBucketWeb(m, cmd, pre, objStoreConfig)
 	registerBucketReplicate(m, cmd, pre, objStoreConfig)
 	registerBucketDownsample(m, cmd, pre, objStoreConfig)
+	registerBucketAnalyze(m, cmd, pre, objStoreConfig)
 }
 
 func registerBucketVerify(m map[string]setupFunc, root *kingpin.CmdClause, name string, objStoreConfig *extflag.PathOrContent) {
@@ -468,6 +469,49 @@ func registerBucketDownsample(m map[string]setupFunc, root *kingpin.CmdClause, n
 
 	m[name+" "+comp.String()] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ <-chan struct{}, _ bool) error {
 		return RunDownsample(g, logger, reg, *httpAddr, time.Duration(*httpGracePeriod), *dataDir, objStoreConfig, comp)
+	}
+}
+
+func registerBucketAnalyze(m map[string]setupFunc, root *kingpin.CmdClause, name string, objStoreConfig *extflag.PathOrContent) {
+	cmd := root.Command("analyze", fmt.Sprintf("Replicate data from one object storage to another. NOTE: Currently it works only with Thanos blocks (%v has to have Thanos metadata).", block.MetaFilename))
+	timeout := cmd.Flag("timeout", "Timeout to download metadata from remote storage").Default("5m").Duration()
+
+	m[name+" analyze"] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ <-chan struct{}, _ bool) error {
+		confContentYaml, err := objStoreConfig.Content()
+		if err != nil {
+			return err
+		}
+
+		bkt, err := client.NewBucket(logger, confContentYaml, reg, name)
+		if err != nil {
+			return err
+		}
+
+		fetcher, err := block.NewMetaFetcher(logger, fetcherConcurrency, bkt, "", extprom.WrapRegistererWithPrefix(extpromPrefix, reg), nil, nil)
+		if err != nil {
+			return err
+		}
+
+		// Dummy actor to immediately kill the group after the run function returns.
+		g.Add(func() error { return nil }, func(error) {})
+
+		defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
+
+		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+		defer cancel()
+
+		// Getting Metas.
+		metas, _, err := fetcher.Fetch(ctx)
+		if err != nil {
+			return err
+		}
+
+		blockMetas := make([]*metadata.Meta, 0, len(metas))
+		for _, meta := range metas {
+			blockMetas = append(blockMetas, meta)
+		}
+
+		return nil
 	}
 }
 
