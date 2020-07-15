@@ -73,6 +73,7 @@ func RunReplicate(
 	compactions []int,
 	fromObjStoreConfig *extflag.PathOrContent,
 	toObjStoreConfig *extflag.PathOrContent,
+	blockIDs []string,
 	singleRun bool,
 ) error {
 	logger = log.With(logger, "component", "replicate")
@@ -177,11 +178,9 @@ func RunReplicate(
 		logger := log.With(logger, "replication-run-id", ulid.String())
 		level.Info(logger).Log("msg", "running replication attempt")
 
-		if err := newReplicationScheme(logger, metrics, blockFilter, fetcher, fromBkt, toBkt, reg).execute(ctx); err != nil {
-			return errors.Wrap(err, "replication execute")
-		}
+		rs := newReplicationScheme(logger, metrics, blockFilter, fetcher, fromBkt, toBkt, reg)
 
-		return nil
+		return errors.Wrap(rs.execute(ctx, blockIDs), "replication execute")
 	}
 
 	g.Add(func() error {
@@ -189,6 +188,11 @@ func RunReplicate(
 		defer runutil.CloseWithLogOnErr(logger, toBkt, "to bucket client")
 
 		if singleRun {
+			return replicateFn()
+		}
+
+		if len(blockIDs) > 0 {
+			level.Info(logger).Log("msg", "Block IDs specified. Replicate blocks in a single run.")
 			return replicateFn()
 		}
 

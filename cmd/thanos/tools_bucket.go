@@ -427,6 +427,7 @@ func registerBucketReplicate(m map[string]setupFunc, root *kingpin.CmdClause, na
 	compactions := cmd.Flag("compaction", "Only blocks with these compaction levels will be replicated. Repeated flag.").Default("1", "2", "3", "4").Ints()
 	matcherStrs := cmd.Flag("matcher", "Only blocks whose external labels exactly match this matcher will be replicated.").PlaceHolder("key=\"value\"").Strings()
 	singleRun := cmd.Flag("single-run", "Run replication only one time, then exit.").Default("false").Bool()
+	blockIDs := cmd.Flag("block", "ID of the specified blocks that need to replicated (repeatable).").PlaceHolder("<block>").Strings()
 
 	m[name+" replicate"] = func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ <-chan struct{}, _ bool) error {
 		matchers, err := replicate.ParseFlagMatchers(*matcherStrs)
@@ -451,6 +452,7 @@ func registerBucketReplicate(m map[string]setupFunc, root *kingpin.CmdClause, na
 			*compactions,
 			objStoreConfig,
 			toObjStoreConfig,
+			*blockIDs,
 			*singleRun,
 		)
 	}

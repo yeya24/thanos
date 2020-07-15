@@ -180,48 +180,62 @@ func newReplicationScheme(
 	}
 }
 
-func (rs *replicationScheme) execute(ctx context.Context) error {
+func (rs *replicationScheme) execute(ctx context.Context, blockIDs []string) error {
 	availableBlocks := []*metadata.Meta{}
 
-	level.Debug(rs.logger).Log("msg", "scanning blocks available blocks for replication")
 
-	if err := rs.fromBkt.Iter(ctx, "", func(name string) error {
-		rs.metrics.originIterations.Inc()
 
-		id, ok := thanosblock.IsBlockDir(name)
-		if !ok {
-			return nil
-		}
-
+	// If no block IDs specified, scan the whole bucket for blocks.
+	if len(blockIDs) == 0 {
 		rs.metrics.originMetaLoads.Inc()
-
-		meta, metaNonExistentOrPartial, err := loadMeta(ctx, rs, id)
+		metas, metaNonExistentOrPartial, err := loadMeta(ctx, rs)
 		if metaNonExistentOrPartial {
 			// meta.json is the last file uploaded by a Thanos shipper,
 			// therefore a block may be partially present, but no meta.json
 			// file yet. If this is the case we skip that block for now.
 			rs.metrics.originPartialMeta.Inc()
-			level.Info(rs.logger).Log("msg", "block meta not uploaded yet. Skipping.", "block_uuid", id.String())
+			level.Info(rs.logger).Log("msg", "block meta not uploaded yet. Skipping.")
 			return nil
 		}
 		if err != nil {
-			return errors.Wrapf(err, "load meta for block %v from origin bucket", id.String())
+			return errors.Wrapf(err, "load meta for block %v from origin bucket")
 		}
 
-		if len(meta.Thanos.Labels) == 0 {
-			// TODO(bwplotka): Allow injecting custom labels as shipper does.
-			level.Info(rs.logger).Log("msg", "block meta without Thanos external labels set. This is not allowed. Skipping.", "block_uuid", id.String())
+		level.Debug(rs.logger).Log("msg", "scanning blocks available blocks for replication")
+
+		if err := rs.fromBkt.Iter(ctx, "", func(name string) error {
+			rs.metrics.originIterations.Inc()
+
+			id, ok := thanosblock.IsBlockDir(name)
+			if !ok {
+				return nil
+			}
+
+			meta, ok := metas[id]
+			if !ok {
+				return errors.New()
+			}
+
+			if len(meta.Thanos.Labels) == 0 {
+				// TODO(bwplotka): Allow injecting custom labels as shipper does.
+				level.Info(rs.logger).Log("msg", "block meta without Thanos external labels set. This is not allowed. Skipping.", "block_uuid", id.String())
+				return nil
+			}
+
+			if rs.blockFilter(meta) {
+				level.Info(rs.logger).Log("msg", "adding block to be replicated", "block_uuid", id.String())
+				availableBlocks = append(availableBlocks, meta)
+			}
+
 			return nil
+		}); err != nil {
+			return errors.Wrap(err, "iterate over origin bucket")
 		}
-
-		if rs.blockFilter(meta) {
-			level.Info(rs.logger).Log("msg", "adding block to be replicated", "block_uuid", id.String())
-			availableBlocks = append(availableBlocks, meta)
-		}
-
-		return nil
-	}); err != nil {
-		return errors.Wrap(err, "iterate over origin bucket")
+	} else {
+		//for _, block := range blockIDs {
+		//	rs.fromBkt.Exists()
+		//}
+		//thanosblock.IsBlockDir()
 	}
 
 	// In order to prevent races in compactions by the target environment, we
@@ -354,7 +368,7 @@ func (rs *replicationScheme) ensureObjectReplicated(ctx context.Context, objectN
 // not being present or partial. The distinction is important, as if missing or
 // partial, this is just a temporary failure, as the block is still being
 // uploaded to the origin bucket.
-func loadMeta(ctx context.Context, rs *replicationScheme, id ulid.ULID) (*metadata.Meta, bool, error) {
+func loadMeta(ctx context.Context, rs *replicationScheme) (map[ulid.ULID]*metadata.Meta, bool, error) {
 	metas, _, err := rs.fetcher.Fetch(ctx)
 	if err != nil {
 		switch errors.Cause(err) {
