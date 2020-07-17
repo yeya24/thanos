@@ -12,7 +12,7 @@ require (
 	github.com/cespare/xxhash v1.1.0
 	github.com/chromedp/cdproto v0.0.0-20200424080200-0de008e41fa0
 	github.com/chromedp/chromedp v0.5.3
-	github.com/cortexproject/cortex v0.6.1-0.20200228110116-92ab6cbe0995
+	github.com/cortexproject/cortex v1.2.1-0.20200728113518-da30af7f98c4
 	github.com/davecgh/go-spew v1.1.1
 	github.com/facette/natsort v0.0.0-20181210072756-2cd4dd1e2dcb
 	github.com/fatih/structtag v1.1.0
@@ -49,10 +49,10 @@ require (
 	github.com/prometheus/client_golang v1.7.1
 	github.com/prometheus/client_model v0.2.0
 	github.com/prometheus/common v0.10.0
-	github.com/prometheus/prometheus v1.8.2-0.20200707115909-30505a202a4c
-	github.com/sercand/kuberesolver v2.4.0+incompatible // indirect
+	github.com/prometheus/prometheus v1.8.2-0.20200728044242-348ff4285ffa
 	github.com/uber/jaeger-client-go v2.24.0+incompatible
 	github.com/uber/jaeger-lib v2.2.0+incompatible
+	github.com/weaveworks/common v0.0.0-20200625145055-4b1847531bc9
 	go.elastic.co/apm v1.5.0
 	go.elastic.co/apm/module/apmot v1.5.0
 	go.uber.org/atomic v1.6.0
@@ -76,7 +76,8 @@ require (
 // See https://github.com/thanos-io/thanos/issues/1415
 replace (
 	// Make sure Cortex is not forcing us to some other Prometheus version.
-	github.com/prometheus/prometheus => github.com/prometheus/prometheus v1.8.2-0.20200714083622-823b218e1b2e
+	github.com/prometheus/prometheus => github.com/prometheus/prometheus v1.8.2-0.20200722151933-4a8531a64b32
+	google.golang.org/grpc => google.golang.org/grpc v1.29.1
 	k8s.io/klog => k8s.io/klog v0.3.1
 	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20190228160746-b3a7cee44a30
 )
