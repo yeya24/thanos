@@ -147,8 +147,6 @@ func registerQuery(m map[string]setupFunc, app *kingpin.Application) {
 			level.Warn(logger).Log("msg", "different values for --web.route-prefix and --web.external-prefix detected, web UI may not work without a reverse-proxy.")
 		}
 
-		promql.SetDefaultEvaluationInterval(time.Duration(*defaultEvaluationInterval))
-
 		flagsMap := getFlagsMap(cmd.Model().Flags)
 
 		return runQuery(
@@ -190,6 +188,7 @@ func registerQuery(m map[string]setupFunc, app *kingpin.Application) {
 			time.Duration(*instantDefaultMaxSourceResolution),
 			*strictStores,
 			component.Query,
+			time.Duration(*defaultEvaluationInterval),
 		)
 	}
 }
@@ -235,6 +234,7 @@ func runQuery(
 	instantDefaultMaxSourceResolution time.Duration,
 	strictStores []string,
 	comp component.Component,
+	defaultEvaluationInterval time.Duration,
 ) error {
 	// TODO(bplotka in PR #513 review): Move arguments into struct.
 	duplicatedStores := promauto.With(reg).NewCounter(prometheus.CounterOpts{
@@ -305,6 +305,9 @@ func runQuery(
 				// TODO(bwplotka): Expose this as a flag: https://github.com/thanos-io/thanos/issues/703.
 				MaxSamples: math.MaxInt32,
 				Timeout:    queryTimeout,
+				NoStepSubqueryIntervalFn: func(rangeMillis int64) int64 {
+					return defaultEvaluationInterval.Milliseconds()
+				},
 			},
 		)
 	)
