@@ -1,7 +1,7 @@
 // Copyright (c) The Thanos Authors.
 // Licensed under the Apache License 2.0.
 
-package cache
+package storecache
 
 import (
 	"context"
@@ -12,20 +12,20 @@ import (
 	"github.com/thanos-io/thanos/pkg/tracing"
 )
 
-// TracingCache includes Fetch operation in the traces.
-type TracingCache struct {
+// tracingCache includes Fetch operation in the traces.
+type tracingCache struct {
 	c Cache
 }
 
-func NewTracingCache(cache Cache) Cache {
-	return TracingCache{c: cache}
+func newTracingCache(cache Cache) Cache {
+	return tracingCache{c: cache}
 }
 
-func (t TracingCache) Store(ctx context.Context, data map[string][]byte, ttl time.Duration) {
+func (t tracingCache) Store(ctx context.Context, data map[string][]byte, ttl time.Duration) {
 	t.c.Store(ctx, data, ttl)
 }
 
-func (t TracingCache) Fetch(ctx context.Context, keys []string) (result map[string][]byte) {
+func (t tracingCache) Fetch(ctx context.Context, keys []string) (result map[string][]byte) {
 	tracing.DoWithSpan(ctx, "cache_fetch", func(spanCtx context.Context, span opentracing.Span) {
 		span.LogKV("requested keys", len(keys))
 

@@ -5,8 +5,6 @@ package storecache
 
 import (
 	"time"
-
-	"github.com/thanos-io/thanos/pkg/cache"
 )
 
 // Codec for encoding and decoding results of Iter call.
@@ -39,7 +37,7 @@ func NewCachingBucketConfig() *CachingBucketConfig {
 // Generic config for single operation.
 type operationConfig struct {
 	matcher func(name string) bool
-	cache   cache.Cache
+	cache   Cache
 }
 
 // Operation-specific configs.
@@ -74,7 +72,7 @@ type attributesConfig struct {
 	ttl time.Duration
 }
 
-func newOperationConfig(cache cache.Cache, matcher func(string) bool) operationConfig {
+func newOperationConfig(cache Cache, matcher func(string) bool) operationConfig {
 	if cache == nil {
 		panic("cache")
 	}
@@ -89,7 +87,7 @@ func newOperationConfig(cache cache.Cache, matcher func(string) bool) operationC
 }
 
 // CacheIter configures caching of "Iter" operation for matching directories.
-func (cfg *CachingBucketConfig) CacheIter(configName string, cache cache.Cache, matcher func(string) bool, ttl time.Duration, codec IterCodec) {
+func (cfg *CachingBucketConfig) CacheIter(configName string, cache Cache, matcher func(string) bool, ttl time.Duration, codec IterCodec) {
 	cfg.iter[configName] = &iterConfig{
 		operationConfig: newOperationConfig(cache, matcher),
 		ttl:             ttl,
@@ -98,7 +96,7 @@ func (cfg *CachingBucketConfig) CacheIter(configName string, cache cache.Cache, 
 }
 
 // CacheGet configures caching of "Get" operation for matching files. Content of the object is cached, as well as whether object exists or not.
-func (cfg *CachingBucketConfig) CacheGet(configName string, cache cache.Cache, matcher func(string) bool, maxCacheableSize int, contentTTL, existsTTL, doesntExistTTL time.Duration) {
+func (cfg *CachingBucketConfig) CacheGet(configName string, cache Cache, matcher func(string) bool, maxCacheableSize int, contentTTL, existsTTL, doesntExistTTL time.Duration) {
 	cfg.get[configName] = &getConfig{
 		existsConfig: existsConfig{
 			operationConfig: newOperationConfig(cache, matcher),
@@ -111,7 +109,7 @@ func (cfg *CachingBucketConfig) CacheGet(configName string, cache cache.Cache, m
 }
 
 // CacheExists configures caching of "Exists" operation for matching files. Negative values are cached as well.
-func (cfg *CachingBucketConfig) CacheExists(configName string, cache cache.Cache, matcher func(string) bool, existsTTL, doesntExistTTL time.Duration) {
+func (cfg *CachingBucketConfig) CacheExists(configName string, cache Cache, matcher func(string) bool, existsTTL, doesntExistTTL time.Duration) {
 	cfg.exists[configName] = &existsConfig{
 		operationConfig: newOperationConfig(cache, matcher),
 		existsTTL:       existsTTL,
@@ -124,7 +122,7 @@ func (cfg *CachingBucketConfig) CacheExists(configName string, cache cache.Cache
 // Single "GetRange" requests can result in multiple smaller GetRange sub-requests issued on the underlying bucket.
 // MaxSubRequests specifies how many such subrequests may be issued. Values <= 0 mean there is no limit (requests
 // for adjacent missing subranges are still merged).
-func (cfg *CachingBucketConfig) CacheGetRange(configName string, cache cache.Cache, matcher func(string) bool, subrangeSize int64, attributesTTL, subrangeTTL time.Duration, maxSubRequests int) {
+func (cfg *CachingBucketConfig) CacheGetRange(configName string, cache Cache, matcher func(string) bool, subrangeSize int64, attributesTTL, subrangeTTL time.Duration, maxSubRequests int) {
 	cfg.getRange[configName] = &getRangeConfig{
 		operationConfig: newOperationConfig(cache, matcher),
 		subrangeSize:    subrangeSize,
@@ -135,7 +133,7 @@ func (cfg *CachingBucketConfig) CacheGetRange(configName string, cache cache.Cac
 }
 
 // CacheAttributes configures caching of "Attributes" operation for matching files.
-func (cfg *CachingBucketConfig) CacheAttributes(configName string, cache cache.Cache, matcher func(name string) bool, ttl time.Duration) {
+func (cfg *CachingBucketConfig) CacheAttributes(configName string, cache Cache, matcher func(name string) bool, ttl time.Duration) {
 	cfg.attributes[configName] = &attributesConfig{
 		operationConfig: newOperationConfig(cache, matcher),
 		ttl:             ttl,

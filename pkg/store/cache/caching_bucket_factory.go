@@ -15,7 +15,6 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/thanos-io/thanos/pkg/block/metadata"
-	cache "github.com/thanos-io/thanos/pkg/cache"
 	"github.com/thanos-io/thanos/pkg/cacheutil"
 	"github.com/thanos-io/thanos/pkg/model"
 	"github.com/thanos-io/thanos/pkg/objstore"
@@ -79,7 +78,7 @@ func NewCachingBucketFromYaml(yamlContent []byte, bucket objstore.Bucket, logger
 		return nil, errors.Wrap(err, "marshal content of cache backend configuration")
 	}
 
-	var c cache.Cache
+	var c Cache
 
 	switch strings.ToUpper(string(config.Type)) {
 	case string(MemcachedBucketCacheProvider):
@@ -88,13 +87,13 @@ func NewCachingBucketFromYaml(yamlContent []byte, bucket objstore.Bucket, logger
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to create memcached client")
 		}
-		c = cache.NewMemcachedCache("caching-bucket", logger, memcached, reg)
+		c = newMemcachedCache("caching-bucket", logger, memcached, reg)
 	default:
 		return nil, errors.Errorf("unsupported cache type: %s", config.Type)
 	}
 
 	// Include interactions with cache in the traces.
-	c = cache.NewTracingCache(c)
+	c = newTracingCache(c)
 	cfg := NewCachingBucketConfig()
 
 	// Configure cache.

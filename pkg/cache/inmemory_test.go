@@ -2,7 +2,7 @@
 // Licensed under the Apache License 2.0.
 
 // Tests out the index cache implementation.
-package storecache
+package cache
 
 import (
 	"bytes"
@@ -22,19 +22,19 @@ import (
 	"github.com/thanos-io/thanos/pkg/testutil"
 )
 
-func TestNewInMemoryIndexCache(t *testing.T) {
+func TestnewInMemoryIndexCache(t *testing.T) {
 	defer leaktest.CheckTimeout(t, 10*time.Second)()
 
 	// Should return error on invalid YAML config.
 	conf := []byte("invalid")
-	cache, err := NewInMemoryIndexCache(log.NewNopLogger(), nil, conf)
+	cache, err := newInMemoryIndexCache(log.NewNopLogger(), nil, conf)
 	testutil.NotOk(t, err)
 	testutil.Equals(t, (*InMemoryIndexCache)(nil), cache)
 
 	// Should instance an in-memory index cache with default config
 	// on empty YAML config.
 	conf = []byte{}
-	cache, err = NewInMemoryIndexCache(log.NewNopLogger(), nil, conf)
+	cache, err = newInMemoryIndexCache(log.NewNopLogger(), nil, conf)
 	testutil.Ok(t, err)
 	testutil.Equals(t, uint64(DefaultInMemoryIndexCacheConfig.MaxSize), cache.maxSizeBytes)
 	testutil.Equals(t, uint64(DefaultInMemoryIndexCacheConfig.MaxItemSize), cache.maxItemSizeBytes)
@@ -44,7 +44,7 @@ func TestNewInMemoryIndexCache(t *testing.T) {
 max_size: 1MB
 max_item_size: 2KB
 `)
-	cache, err = NewInMemoryIndexCache(log.NewNopLogger(), nil, conf)
+	cache, err = newInMemoryIndexCache(log.NewNopLogger(), nil, conf)
 	testutil.Ok(t, err)
 	testutil.Equals(t, uint64(1024*1024), cache.maxSizeBytes)
 	testutil.Equals(t, uint64(2*1024), cache.maxItemSizeBytes)

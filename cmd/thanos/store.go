@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/common/route"
 	"github.com/thanos-io/thanos/pkg/block"
+	"github.com/thanos-io/thanos/pkg/cache"
 	"github.com/thanos-io/thanos/pkg/component"
 	"github.com/thanos-io/thanos/pkg/extflag"
 	"github.com/thanos-io/thanos/pkg/extprom"
@@ -250,13 +251,13 @@ func runStore(
 
 	// Create the index cache loading its config from config file, while keeping
 	// backward compatibility with the pre-config file era.
-	var indexCache storecache.IndexCache
+	var indexCache cache.IndexCache
 	if len(indexCacheContentYaml) > 0 {
-		indexCache, err = storecache.NewIndexCache(logger, indexCacheContentYaml, reg)
+		indexCache, err = cache.NewIndexCache(logger, indexCacheContentYaml, reg)
 	} else {
-		indexCache, err = storecache.NewInMemoryIndexCacheWithConfig(logger, reg, storecache.InMemoryIndexCacheConfig{
+		indexCache, err = cache.NewInMemoryIndexCacheWithConfig(logger, reg, cache.InMemoryIndexCacheConfig{
 			MaxSize:     model.Bytes(indexCacheSizeBytes),
-			MaxItemSize: storecache.DefaultInMemoryIndexCacheConfig.MaxItemSize,
+			MaxItemSize: cache.DefaultInMemoryIndexCacheConfig.MaxItemSize,
 		})
 	}
 	if err != nil {

@@ -1,7 +1,7 @@
 // Copyright (c) The Thanos Authors.
 // Licensed under the Apache License 2.0.
 
-package storecache
+package cache
 
 import (
 	"context"
@@ -68,9 +68,9 @@ func parseInMemoryIndexCacheConfig(conf []byte) (InMemoryIndexCacheConfig, error
 	return config, nil
 }
 
-// NewInMemoryIndexCache creates a new thread-safe LRU cache for index entries and ensures the total cache
+// newInMemoryIndexCache creates a new thread-safe LRU cache for index entries and ensures the total cache
 // size approximately does not exceed maxBytes.
-func NewInMemoryIndexCache(logger log.Logger, reg prometheus.Registerer, conf []byte) (*InMemoryIndexCache, error) {
+func newInMemoryIndexCache(logger log.Logger, reg prometheus.Registerer, conf []byte) (*InMemoryIndexCache, error) {
 	config, err := parseInMemoryIndexCacheConfig(conf)
 	if err != nil {
 		return nil, err

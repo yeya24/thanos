@@ -1,7 +1,7 @@
 // Copyright (c) The Thanos Authors.
 // Licensed under the Apache License 2.0.
 
-package storecache
+package cache
 
 import (
 	"fmt"
@@ -44,12 +44,12 @@ func NewIndexCache(logger log.Logger, confContentYaml []byte, reg prometheus.Reg
 	var cache IndexCache
 	switch strings.ToUpper(string(cacheConfig.Type)) {
 	case string(INMEMORY):
-		cache, err = NewInMemoryIndexCache(logger, reg, backendConfig)
+		cache, err = newInMemoryIndexCache(logger, reg, backendConfig)
 	case string(MEMCACHED):
 		var memcached cacheutil.MemcachedClient
 		memcached, err = cacheutil.NewMemcachedClient(logger, "index-cache", backendConfig, reg)
 		if err == nil {
-			cache, err = NewMemcachedIndexCache(logger, memcached, reg)
+			cache, err = newMemcachedIndexCache(logger, memcached, reg)
 		}
 	default:
 		return nil, errors.Errorf("index cache with type %s is not supported", cacheConfig.Type)

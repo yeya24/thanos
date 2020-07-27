@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/thanos-io/thanos/pkg/cache"
 	"io"
 	"io/ioutil"
 	"math"
@@ -46,7 +47,6 @@ import (
 	"github.com/thanos-io/thanos/pkg/pool"
 	"github.com/thanos-io/thanos/pkg/promclient"
 	"github.com/thanos-io/thanos/pkg/runutil"
-	storecache "github.com/thanos-io/thanos/pkg/store/cache"
 	"github.com/thanos-io/thanos/pkg/store/hintspb"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
 	"github.com/thanos-io/thanos/pkg/strutil"
@@ -237,7 +237,7 @@ type BucketStore struct {
 	bkt        objstore.InstrumentedBucketReader
 	fetcher    block.MetadataFetcher
 	dir        string
-	indexCache storecache.IndexCache
+	indexCache cache.IndexCache
 	chunkPool  pool.BytesPool
 
 	// Sets of blocks that have the same labels. They are indexed by a hash over their label set.
@@ -279,7 +279,7 @@ func NewBucketStore(
 	bkt objstore.InstrumentedBucketReader,
 	fetcher block.MetadataFetcher,
 	dir string,
-	indexCache storecache.IndexCache,
+	indexCache cache.IndexCache,
 	queryGate gate.Gate,
 	maxChunkPoolBytes uint64,
 	chunksLimiterFactory ChunksLimiterFactory,
@@ -1261,7 +1261,7 @@ type bucketBlock struct {
 	bkt        objstore.BucketReader
 	meta       *metadata.Meta
 	dir        string
-	indexCache storecache.IndexCache
+	indexCache cache.IndexCache
 	chunkPool  pool.BytesPool
 
 	indexHeaderReader indexheader.Reader
@@ -1287,7 +1287,7 @@ func newBucketBlock(
 	meta *metadata.Meta,
 	bkt objstore.BucketReader,
 	dir string,
-	indexCache storecache.IndexCache,
+	indexCache cache.IndexCache,
 	chunkPool pool.BytesPool,
 	indexHeadReader indexheader.Reader,
 	p partitioner,
