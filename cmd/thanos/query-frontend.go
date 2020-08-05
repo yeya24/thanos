@@ -42,6 +42,7 @@ type queryRangeConfig struct {
 	maxRetries          int
 	maxQueryParallelism int
 	maxQueryLength      model.Duration
+	partialResponse     bool
 }
 
 type responseCacheConfig struct {
@@ -70,6 +71,9 @@ func (c *queryRangeConfig) registerFlag(cmd *kingpin.CmdClause) {
 
 	cmd.Flag("query-range.max-query-parallelism", "Maximum number of queries will be scheduled in parallel by the frontend.").
 		Default("14").IntVar(&c.maxQueryParallelism)
+
+	cmd.Flag("query.partial-response", "Enable partial response for queries if no partial_response param is specified. --no-query.partial-response for disabling.").
+		Default("true").BoolVar(&c.partialResponse)
 }
 
 func (c *queryFrontendConfig) registerFlag(cmd *kingpin.CmdClause) {
@@ -130,9 +134,10 @@ func runQueryFrontend(
 		conf.queryRangeConfig.respCacheConfig.cacheMaxFreshness,
 	)
 
+	codec := queryfrontend.NewThanosCodec(conf.queryRangeConfig.partialResponse)
 	tripperWare, err := queryfrontend.NewTripperWare(
 		limits,
-		queryrange.PrometheusCodec,
+		codec,
 		queryrange.PrometheusResponseExtractor{},
 		conf.queryRangeConfig.cacheResults,
 		time.Duration(conf.queryRangeConfig.splitInterval),
