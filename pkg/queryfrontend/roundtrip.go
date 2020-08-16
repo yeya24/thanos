@@ -72,6 +72,7 @@ func NewTripperWare(
 			codec,
 			cacheExtractor,
 			nil,
+			shouldCache,
 			reg,
 		)
 		if err != nil {
@@ -111,4 +112,18 @@ func NewTripperWare(
 			return next.RoundTrip(r)
 		})
 	}, nil
+}
+
+func shouldCache(r queryrange.Request) bool {
+	if tr, ok := r.(*ThanosRequest); ok {
+		if !tr.Cache {
+			return false
+		}
+
+		// request with storeMatch is used in debug cases so we shouldn't cache it.
+		if len(tr.StoreMatchers) > 0 {
+			return false
+		}
+	}
+	return true
 }

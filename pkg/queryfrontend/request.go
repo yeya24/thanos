@@ -25,6 +25,8 @@ type ThanosRequest struct {
 	MaxSourceResolution int64
 	ReplicaLabels       []string
 	StoreMatchers       [][]storepb.LabelMatcher
+
+	Cache bool
 }
 
 // GetStart returns the start timestamp of the request in milliseconds.

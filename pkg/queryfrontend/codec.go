@@ -74,6 +74,11 @@ func (c codec) DecodeRequest(_ context.Context, r *http.Request) (queryrange.Req
 		return nil, errStepTooSmall
 	}
 
+	result.Cache, err = parseCacheParam(r.FormValue("cache"))
+	if err != nil {
+		return nil, err
+	}
+
 	result.Dedup, err = parseEnableDedupParam(r.FormValue("dedup"))
 	if err != nil {
 		return nil, err
@@ -172,6 +177,19 @@ func parseEnableDedupParam(s string) (bool, error) {
 	}
 
 	return enableDeduplication, nil
+}
+
+func parseCacheParam(s string) (bool, error) {
+	cache := true
+	if s != "" {
+		var err error
+		cache, err = strconv.ParseBool(s)
+		if err != nil {
+			return cache, httpgrpc.Errorf(http.StatusBadRequest, errCannotParse, "cache")
+		}
+	}
+
+	return cache, nil
 }
 
 func parseDownsamplingParamMillis(s string) (int64, error) {
