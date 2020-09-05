@@ -30,12 +30,14 @@ import (
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
+	"google.golang.org/grpc/codes"
+	yaml "gopkg.in/yaml.v2"
+
+	"github.com/thanos-io/thanos/pkg/api"
 	"github.com/thanos-io/thanos/pkg/rules/rulespb"
 	"github.com/thanos-io/thanos/pkg/runutil"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
 	"github.com/thanos-io/thanos/pkg/tracing"
-	"google.golang.org/grpc/codes"
-	yaml "gopkg.in/yaml.v2"
 )
 
 var (
@@ -97,13 +99,16 @@ func NewWithTracingClient(logger log.Logger, userAgent string) *Client {
 	)
 }
 
-func (c *Client) get2xx(ctx context.Context, u *url.URL) (_ []byte, _ int, err error) {
+func (c *Client) get2xx(ctx context.Context, u *url.URL, disableCache bool) (_ []byte, _ int, err error) {
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, 0, errors.Wrap(err, "create GET request")
 	}
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
+	}
+	if disableCache {
+		req.Header.Set(api.CacheControlHeader, api.NoStoreValue)
 	}
 
 	resp, err := c.Do(req.WithContext(ctx))
@@ -148,7 +153,7 @@ func (c *Client) ExternalLabels(ctx context.Context, base *url.URL) (labels.Labe
 	span, ctx := tracing.StartSpan(ctx, "/prom_config HTTP[client]")
 	defer span.Finish()
 
-	body, _, err := c.get2xx(ctx, &u)
+	body, _, err := c.get2xx(ctx, &u, false)
 	if err != nil {
 		return nil, err
 	}
@@ -339,6 +344,8 @@ func (c *Client) Snapshot(ctx context.Context, base *url.URL, skipHead bool) (st
 type QueryOptions struct {
 	Deduplicate             bool
 	PartialResponseStrategy storepb.PartialResponseStrategy
+	StoreMatchers           [][]storepb.LabelMatcher
+	DisableCache            bool
 }
 
 func (p *QueryOptions) AddTo(values url.Values) error {
@@ -356,6 +363,14 @@ func (p *QueryOptions) AddTo(values url.Values) error {
 
 	// TODO(bwplotka): Apply change from bool to strategy in Query API as well.
 	values.Add("partial_response", partialResponseValue)
+
+	if len(p.StoreMatchers) > 0 {
+		storeMatchers, err := MatchersToStringSlice(p.StoreMatchers)
+		if err != nil {
+			return errors.Wrapf(err, "parse store matchers")
+		}
+		values["storeMatch[]"] = storeMatchers
+	}
 
 	return nil
 }
@@ -381,7 +396,7 @@ func (c *Client) QueryInstant(ctx context.Context, base *url.URL, query string, 
 	span, ctx := tracing.StartSpan(ctx, "/prom_query_instant HTTP[client]")
 	defer span.Finish()
 
-	body, _, err := c.get2xx(ctx, &u)
+	body, _, err := c.get2xx(ctx, &u, opts.DisableCache)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "read query instant response")
 	}
@@ -483,7 +498,7 @@ func (c *Client) QueryRange(ctx context.Context, base *url.URL, query string, st
 	span, ctx := tracing.StartSpan(ctx, "/prom_query_range HTTP[client]")
 	defer span.Finish()
 
-	body, _, err := c.get2xx(ctx, &u)
+	body, _, err := c.get2xx(ctx, &u, opts.DisableCache)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "read query range response")
 	}
@@ -565,7 +580,7 @@ func (c *Client) AlertmanagerAlerts(ctx context.Context, base *url.URL) ([]*mode
 	span, ctx := tracing.StartSpan(ctx, "/alertmanager_alerts HTTP[client]")
 	defer span.Finish()
 
-	body, _, err := c.get2xx(ctx, &u)
+	body, _, err := c.get2xx(ctx, &u, false)
 	if err != nil {
 		return nil, err
 	}
@@ -592,7 +607,7 @@ func (c *Client) get2xxResultWithGRPCErrors(ctx context.Context, spanName string
 	span, ctx := tracing.StartSpan(ctx, spanName)
 	defer span.Finish()
 
-	body, code, err := c.get2xx(ctx, u)
+	body, code, err := c.get2xx(ctx, u, false)
 	if err != nil {
 		if code, exists := statusToCode[code]; exists && code != 0 {
 			return status.Error(code, err.Error())

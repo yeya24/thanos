@@ -54,3 +54,17 @@ func MatchersToString(ms []storepb.LabelMatcher) (string, error) {
 
 	return "{" + res + "}", nil
 }
+// MatchersToStringSlice converts storeMatchers to string slice.
+func MatchersToStringSlice(storeMatchers [][]storepb.LabelMatcher) ([]string, error) {
+	res := make([]string, 0, len(storeMatchers))
+	for _, storeMatcher := range storeMatchers {
+		matcher, err := MatchersToString(storeMatcher)
+		if err != nil {
+			return nil, err
+		}
+
+		res = append(res, matcher)
+	}
+
+	return res, nil
+}

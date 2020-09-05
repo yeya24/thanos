@@ -18,16 +18,9 @@ import (
 	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/weaveworks/common/httpgrpc"
 
+	"github.com/thanos-io/thanos/pkg/api"
 	"github.com/thanos-io/thanos/pkg/promclient"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
-)
-
-const (
-	// Name of the cache control header.
-	cacheControlHeader = "Cache-Control"
-
-	// Value that cacheControlHeader has if the response indicates that the results should not be cached.
-	noStoreValue = "no-store"
 )
 
 var (
@@ -115,8 +108,8 @@ func (c codec) DecodeRequest(_ context.Context, r *http.Request) (queryrange.Req
 	result.Query = r.FormValue("query")
 	result.Path = r.URL.Path
 
-	for _, value := range r.Header.Values(cacheControlHeader) {
-		if strings.Contains(value, noStoreValue) {
+	for _, value := range r.Header.Values(api.CacheControlHeader) {
+		if strings.Contains(value, api.NoStoreValue) {
 			result.CachingOptions.Disabled = true
 			break
 		}
@@ -149,7 +142,7 @@ func (c codec) EncodeRequest(ctx context.Context, r queryrange.Request) (*http.R
 	}
 
 	if len(thanosReq.StoreMatchers) > 0 {
-		storeMatchers, err := matchersToStringSlice(thanosReq.StoreMatchers)
+		storeMatchers, err := promclient.MatchersToStringSlice(thanosReq.StoreMatchers)
 		if err != nil {
 			return nil, httpgrpc.Errorf(http.StatusBadRequest, "invalid request format")
 		}
@@ -250,19 +243,4 @@ func encodeTime(t int64) string {
 
 func encodeDurationMillis(d int64) string {
 	return strconv.FormatFloat(float64(d)/float64(time.Second/time.Millisecond), 'f', -1, 64)
-}
-
-// matchersToStringSlice converts storeMatchers to string slice.
-func matchersToStringSlice(storeMatchers [][]storepb.LabelMatcher) ([]string, error) {
-	res := make([]string, 0, len(storeMatchers))
-	for _, storeMatcher := range storeMatchers {
-		matcher, err := promclient.MatchersToString(storeMatcher)
-		if err != nil {
-			return nil, err
-		}
-
-		res = append(res, matcher)
-	}
-
-	return res, nil
 }

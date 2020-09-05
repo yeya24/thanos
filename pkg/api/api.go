@@ -40,6 +40,14 @@ import (
 	"github.com/thanos-io/thanos/pkg/tracing"
 )
 
+const (
+	// Name of the cache control header.
+	CacheControlHeader = "Cache-Control"
+
+	// Value that cacheControlHeader has if the response indicates that the results should not be cached.
+	NoStoreValue = "no-store"
+)
+
 type status string
 
 const (
@@ -219,7 +227,7 @@ func GetInstr(
 func Respond(w http.ResponseWriter, data interface{}, warnings []error) {
 	w.Header().Set("Content-Type", "application/json")
 	if len(warnings) > 0 {
-		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set(CacheControlHeader, NoStoreValue)
 	}
 	w.WriteHeader(http.StatusOK)
 
