@@ -232,7 +232,7 @@ func newLabelsTripperware(
 			newThanosCacheKeyGenerator(config.SplitQueriesByInterval),
 			limits,
 			codec,
-			queryrange.PrometheusResponseExtractor{},
+			ThanosResponseExtractor{},
 			nil,
 			shouldCache,
 			reg,

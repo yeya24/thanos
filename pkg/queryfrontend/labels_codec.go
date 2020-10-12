@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/thanos-io/thanos/pkg/store/labelpb"
 	"io/ioutil"
 	"math"
 	"net/http"
@@ -21,7 +22,6 @@ import (
 	"github.com/cortexproject/cortex/pkg/util/spanlogger"
 	"github.com/opentracing/opentracing-go"
 	otlog "github.com/opentracing/opentracing-go/log"
-	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/weaveworks/common/httpgrpc"
 
@@ -83,14 +83,15 @@ func (c labelsCodec) MergeResponse(responses ...queryrange.Response) (queryrange
 			Data:   lbls,
 		}, nil
 	case *ThanosSeriesResponse:
-		seriesData := make([]labels.Labels, 0)
+		seriesData := make([]labelpb.LabelSet, 0)
 
 		// seriesString is used in soring so we don't have to calculate the string of label sets again.
 		seriesString := make([]string, 0)
 		uniqueSeries := make(map[string]struct{})
 		for _, res := range responses {
 			for _, series := range res.(*ThanosSeriesResponse).Data {
-				s := series.String()
+				//s := series.String()
+				s := labelpb.LabelsToPromLabels(series.Labels).String()
 				if _, ok := uniqueSeries[s]; !ok {
 					seriesData = append(seriesData, series)
 					seriesString = append(seriesString, s)

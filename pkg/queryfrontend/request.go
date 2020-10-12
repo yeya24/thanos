@@ -115,7 +115,7 @@ func (r *ThanosLabelsRequest) GetStart() int64 { return r.Start }
 func (r *ThanosLabelsRequest) GetEnd() int64 { return r.End }
 
 // GetStep returns the step of the request in milliseconds.
-func (r *ThanosLabelsRequest) GetStep() int64 { return 0 }
+func (r *ThanosLabelsRequest) GetStep() int64 { return 1 }
 
 // GetQuery returns the query of the request.
 func (r *ThanosLabelsRequest) GetQuery() string { return "" }
@@ -184,7 +184,7 @@ func (r *ThanosSeriesRequest) GetStart() int64 { return r.Start }
 func (r *ThanosSeriesRequest) GetEnd() int64 { return r.End }
 
 // GetStep returns the step of the request in milliseconds.
-func (r *ThanosSeriesRequest) GetStep() int64 { return 0 }
+func (r *ThanosSeriesRequest) GetStep() int64 { return 1 }
 
 // GetQuery returns the query of the request.
 func (r *ThanosSeriesRequest) GetQuery() string { return "" }
