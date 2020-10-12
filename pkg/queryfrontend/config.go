@@ -166,6 +166,15 @@ func (cfg *Config) Validate() error {
 		}
 	}
 
+	if cfg.LabelsConfig.ResultsCacheConfig != nil {
+		if cfg.LabelsConfig.SplitQueriesByInterval <= 0 {
+			return errors.New("split queries interval should be greater than 0")
+		}
+		if err := cfg.LabelsConfig.ResultsCacheConfig.Validate(); err != nil {
+			return errors.Wrap(err, "invalid ResultsCache config")
+		}
+	}
+
 	if cfg.LabelsConfig.DefaultTimeRange == 0 {
 		return errors.New("labels.default-time-range cannot be set to 0")
 	}
