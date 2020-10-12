@@ -4,6 +4,7 @@
 package main
 
 import (
+	"github.com/thanos-io/thanos/pkg/extflag"
 	"net/http"
 	"time"
 
@@ -20,7 +21,6 @@ import (
 	"github.com/weaveworks/common/user"
 
 	"github.com/thanos-io/thanos/pkg/component"
-	"github.com/thanos-io/thanos/pkg/extflag"
 	"github.com/thanos-io/thanos/pkg/extkingpin"
 	"github.com/thanos-io/thanos/pkg/extprom"
 	extpromhttp "github.com/thanos-io/thanos/pkg/extprom/http"
