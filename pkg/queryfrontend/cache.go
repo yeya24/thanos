@@ -29,11 +29,31 @@ func newThanosCacheKeyGenerator(interval time.Duration) thanosCacheKeyGenerator 
 // GenerateCacheKey generates a cache key based on the Request and interval.
 func (t thanosCacheKeyGenerator) GenerateCacheKey(_ string, r queryrange.Request) string {
 	currentInterval := r.GetStart() / t.interval.Milliseconds()
-	if tr, ok := r.(*ThanosQueryRangeRequest); ok {
+	switch tr := r.(type) {
+	case *ThanosQueryRangeRequest:
 		i := 0
 		for ; i < len(t.resolutions) && t.resolutions[i] > tr.MaxSourceResolution; i++ {
 		}
 		return fmt.Sprintf("%s:%d:%d:%d", tr.Query, tr.Step, currentInterval, i)
+	case *ThanosLabelsRequest:
+		return fmt.Sprintf("%s:%d", tr.Label, currentInterval)
+	case *ThanosSeriesRequest:
+		return fmt.Sprintf("%s:%d", tr.Matchers, currentInterval)
 	}
 	return fmt.Sprintf("%s:%d:%d", r.GetQuery(), r.GetStep(), currentInterval)
+}
+
+// ThanosResponseExtractor helps extracting specific info from Query Response.
+type ThanosResponseExtractor struct{}
+
+// Extract extracts response for specific a range from a response.
+// This interface is not used for labels and series responses.
+func (ThanosResponseExtractor) Extract(_, _ int64, resp queryrange.Response) queryrange.Response {
+	return resp
+}
+
+// ResponseWithoutHeaders just returns the original response since Thanos labels
+// and series responses don't have HTTP headers.
+func (ThanosResponseExtractor) ResponseWithoutHeaders(resp queryrange.Response) queryrange.Response {
+	return resp
 }
