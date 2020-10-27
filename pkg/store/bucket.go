@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"github.com/prometheus/prometheus/tsdb/chunks"
 	"io"
 	"io/ioutil"
 	"math"
@@ -28,7 +29,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/tsdb/chunkenc"
-	"github.com/prometheus/prometheus/tsdb/chunks"
 	"github.com/prometheus/prometheus/tsdb/encoding"
 	"github.com/prometheus/prometheus/tsdb/index"
 	"golang.org/x/sync/errgroup"
@@ -699,21 +699,23 @@ func blockSeries(
 	// Transform all series into the response types and mark their relevant chunks
 	// for preloading.
 	var (
-		res  []seriesEntry
-		lset labels.Labels
-		chks []chunks.Meta
+		res           []seriesEntry
+		lset          labels.Labels
+		chks          []chunks.Meta
+		hasValidChunk bool
 	)
 	for _, id := range ps {
-		if err := indexr.LoadedSeries(id, &lset, &chks, req); err != nil {
+		if hasValidChunk, err = indexr.LoadedSeries(id, &lset, &chks, req); err != nil {
 			return nil, nil, errors.Wrap(err, "read series")
 		}
+		if !hasValidChunk {
+			continue
+		}
+
 		s := seriesEntry{lset: make(labels.Labels, 0, len(lset)+len(extLset))}
 		if !req.SkipChunks {
 			s.refs = make([]uint64, 0, len(chks))
 			s.chks = make([]storepb.AggrChunk, 0, len(chks))
-		}
-
-		if !req.SkipChunks {
 			for _, meta := range chks {
 				if err := chunkr.addPreload(meta.Ref); err != nil {
 					return nil, nil, errors.Wrap(err, "add chunk preload")
@@ -726,29 +728,25 @@ func blockSeries(
 			}
 
 			// Reserve chunksLimiter if we save chunks.
-			if len(s.chks) > 0 {
-				if err := chunksLimiter.Reserve(uint64(len(s.chks))); err != nil {
-					return nil, nil, errors.Wrap(err, "exceeded chunks limit")
-				}
+			if err := chunksLimiter.Reserve(uint64(len(s.chks))); err != nil {
+				return nil, nil, errors.Wrap(err, "exceeded chunks limit")
 			}
 		}
 
-		if len(chks) > 0 {
-			for _, l := range lset {
-				// Skip if the external labels of the block overrule the series' label.
-				// NOTE(fabxc): maybe move it to a prefixed version to still ensure uniqueness of series?
-				if extLset[l.Name] != "" {
-					continue
-				}
-				s.lset = append(s.lset, l)
+		for _, l := range lset {
+			// Skip if the external labels of the block overrule the series' label.
+			// NOTE(fabxc): maybe move it to a prefixed version to still ensure uniqueness of series?
+			if extLset[l.Name] != "" {
+				continue
 			}
-			for ln, lv := range extLset {
-				s.lset = append(s.lset, labels.Label{Name: ln, Value: lv})
-			}
-			sort.Sort(s.lset)
-
-			res = append(res, s)
+			s.lset = append(s.lset, l)
 		}
+		for ln, lv := range extLset {
+			s.lset = append(s.lset, labels.Label{Name: ln, Value: lv})
+		}
+		sort.Sort(s.lset)
+
+		res = append(res, s)
 	}
 
 	if req.SkipChunks {
@@ -1995,10 +1993,11 @@ func (g gapBasedPartitioner) Partition(length int, rng func(int) (uint64, uint64
 // LoadedSeries populates the given labels and chunk metas for the series identified
 // by the reference.
 // Returns ErrNotFound if the ref does not resolve to a known series.
-func (r *bucketIndexReader) LoadedSeries(ref uint64, lset *labels.Labels, chks *[]chunks.Meta, req *storepb.SeriesRequest) error {
+func (r *bucketIndexReader) LoadedSeries(ref uint64, lset *labels.Labels, chks *[]chunks.Meta,
+	req *storepb.SeriesRequest) (bool, error) {
 	b, ok := r.loadedSeries[ref]
 	if !ok {
-		return errors.Errorf("series %d not found", ref)
+		return false, errors.Errorf("series %d not found", ref)
 	}
 
 	r.stats.seriesTouched++
@@ -2008,7 +2007,7 @@ func (r *bucketIndexReader) LoadedSeries(ref uint64, lset *labels.Labels, chks *
 }
 
 func (r *bucketIndexReader) decodeSeriesWithReq(b []byte, lbls *labels.Labels, chks *[]chunks.Meta,
-	req *storepb.SeriesRequest) error {
+	req *storepb.SeriesRequest) (bool, error) {
 	*lbls = (*lbls)[:0]
 	*chks = (*chks)[:0]
 
@@ -2021,16 +2020,16 @@ func (r *bucketIndexReader) decodeSeriesWithReq(b []byte, lbls *labels.Labels, c
 		lvo := uint32(d.Uvarint())
 
 		if d.Err() != nil {
-			return errors.Wrap(d.Err(), "read series label offsets")
+			return false, errors.Wrap(d.Err(), "read series label offsets")
 		}
 
 		ln, err := r.dec.LookupSymbol(lno)
 		if err != nil {
-			return errors.Wrap(err, "lookup label name")
+			return false, errors.Wrap(err, "lookup label name")
 		}
 		lv, err := r.dec.LookupSymbol(lvo)
 		if err != nil {
-			return errors.Wrap(err, "lookup label value")
+			return false, errors.Wrap(err, "lookup label value")
 		}
 
 		*lbls = append(*lbls, labels.Label{Name: ln, Value: lv})
@@ -2040,7 +2039,7 @@ func (r *bucketIndexReader) decodeSeriesWithReq(b []byte, lbls *labels.Labels, c
 	k = d.Uvarint()
 
 	if k == 0 {
-		return nil
+		return false, nil
 	}
 
 	t0 := d.Varint64()
@@ -2048,16 +2047,18 @@ func (r *bucketIndexReader) decodeSeriesWithReq(b []byte, lbls *labels.Labels, c
 	ref0 := int64(d.Uvarint64())
 
 	if t0 > req.MaxTime {
-		return nil
+		return false, nil
 	}
 
-	*chks = append(*chks, chunks.Meta{
-		Ref:     uint64(ref0),
-		MinTime: t0,
-		MaxTime: maxt,
-	})
-	if req.SkipChunks && req.MinTime <= t0 {
-		return nil
+	if req.MinTime <= maxt {
+		if req.SkipChunks {
+			return true, nil
+		}
+		*chks = append(*chks, chunks.Meta{
+			Ref:     uint64(ref0),
+			MinTime: t0,
+			MaxTime: maxt,
+		})
 	}
 
 	t0 = maxt
@@ -2073,24 +2074,24 @@ func (r *bucketIndexReader) decodeSeriesWithReq(b []byte, lbls *labels.Labels, c
 			break
 		}
 
+		if d.Err() != nil {
+			return false, errors.Wrapf(d.Err(), "read meta for chunk %d", i)
+		}
+
+		if req.SkipChunks {
+			return true, nil
+		}
+
 		ref0 += d.Varint64()
 		t0 = maxt
-
-		if d.Err() != nil {
-			return errors.Wrapf(d.Err(), "read meta for chunk %d", i)
-		}
 
 		*chks = append(*chks, chunks.Meta{
 			Ref:     uint64(ref0),
 			MinTime: mint,
 			MaxTime: maxt,
 		})
-
-		if req.SkipChunks {
-			return nil
-		}
 	}
-	return d.Err()
+	return len(*chks) > 0, d.Err()
 }
 
 // Close released the underlying resources of the reader.
