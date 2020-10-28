@@ -1169,7 +1169,7 @@ func BenchmarkBucketSeries(b *testing.B) {
 	})
 }
 
-func BenchmarkBucketSeriesSkipChunks(b *testing.B) {
+func BenchmarkBucketSkipChunksSeries(b *testing.B) {
 	tb := testutil.NewTB(b)
 	// 10e6 samples = ~1736 days with 15s scrape
 	storetestutil.RunSeriesInterestingCases(tb, 10e6, 10e5, func(t testutil.TB, samplesPerSeries, series int) {
