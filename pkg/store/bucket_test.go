@@ -1231,7 +1231,7 @@ func benchBucketSeries(t testutil.TB, skipChunk bool, samplesPerSeries, totalSer
 			Series:           seriesPerBlock,
 			PrependLabels:    extLset,
 			Random:           random,
-			SkipChunks:       false,
+			SkipChunks:       t.IsBenchmark() || skipChunk,
 		})
 		id := createBlockFromHead(t, blockDir, head)
 		testutil.Ok(t, head.Close())
@@ -1253,12 +1253,6 @@ func benchBucketSeries(t testutil.TB, skipChunk bool, samplesPerSeries, totalSer
 			chunkPool:   chunkPool,
 		}
 		blocks = append(blocks, b)
-	}
-
-	if skipChunk {
-		for _, s := range series {
-			s.Chunks = nil
-		}
 	}
 
 	store := &BucketStore{
