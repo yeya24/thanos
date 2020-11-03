@@ -5,6 +5,7 @@ package storepb
 
 import (
 	"bytes"
+	"container/heap"
 	"fmt"
 	"sort"
 	"strconv"
@@ -74,18 +75,162 @@ func EmptySeriesSet() SeriesSet {
 // as well as single SeriesSet alone). If the chunk ranges overlap, the *exact* chunk duplicates will be removed
 // (except one), and any other overlaps will be appended into on chunks slice.
 func MergeSeriesSets(all ...SeriesSet) SeriesSet {
+	//switch len(all) {
+	//case 0:
+	//	return emptySeriesSet{}
+	//case 1:
+	//	return newUniqueSeriesSet(all[0])
+	//}
+	//h := len(all) / 2
+	//
+	//return newMergedSeriesSet(
+	//	MergeSeriesSets(all[:h]...),
+	//	MergeSeriesSets(all[h:]...),
+	//)
+
 	switch len(all) {
 	case 0:
 		return emptySeriesSet{}
 	case 1:
 		return newUniqueSeriesSet(all[0])
 	}
-	h := len(all) / 2
+	return newGenericMergeSeriesSet(all, ChainedSeriesMerge)
+}
 
-	return newMergedSeriesSet(
-		MergeSeriesSets(all[:h]...),
-		MergeSeriesSets(all[h:]...),
-	)
+func ChainedSeriesMerge(labels ...labels.Labels) labels.Labels {
+	if len(labels) == 0 {
+		return nil
+	}
+	return labels[0]
+}
+
+type genericSeriesMergeFunc func(...labels.Labels) labels.Labels
+
+func newGenericMergeSeriesSet(sets []SeriesSet, mergeFunc genericSeriesMergeFunc) SeriesSet {
+	if len(sets) == 1 {
+		return sets[0]
+	}
+
+	// We are pre-advancing sets, so we can introspect the label of the
+	// series under the cursor.
+	var h seriesSetHeap
+	for _, set := range sets {
+		if set == nil {
+			continue
+		}
+		if set.Next() {
+			heap.Push(&h, set)
+		}
+		if err := set.Err(); err != nil {
+			return errorOnlySeriesSet{err}
+		}
+	}
+	return &genericMergeSeriesSet{
+		mergeFunc: mergeFunc,
+		sets:      sets,
+		heap:      h,
+	}
+}
+
+type errorOnlySeriesSet struct {
+	err error
+}
+
+func (errorOnlySeriesSet) Next() bool                       { return false }
+func (errorOnlySeriesSet) At() (labels.Labels, []AggrChunk) { return nil, nil }
+func (s errorOnlySeriesSet) Err() error                     { return s.err }
+
+// genericMergeSeriesSet implements genericSeriesSet.
+type genericMergeSeriesSet struct {
+	currentLabels labels.Labels
+	mergeFunc     genericSeriesMergeFunc
+
+	heap        seriesSetHeap
+	sets        []SeriesSet
+	currentSets []SeriesSet
+}
+
+func (c *genericMergeSeriesSet) Next() bool {
+	// Run in a loop because the "next" series sets may not be valid anymore.
+	// If, for the current label set, all the next series sets come from
+	// failed remote storage sources, we want to keep trying with the next label set.
+	for {
+		// Firstly advance all the current series sets. If any of them have run out,
+		// we can drop them, otherwise they should be inserted back into the heap.
+		for _, set := range c.currentSets {
+			if set.Next() {
+				heap.Push(&c.heap, set)
+			}
+		}
+
+		if len(c.heap) == 0 {
+			return false
+		}
+
+		// Now, pop items of the heap that have equal label sets.
+		c.currentSets = nil
+		c.currentLabels, _ = c.heap[0].At()
+		for len(c.heap) > 0 {
+			lbls, _ := c.heap[0].At()
+			if labels.Equal(c.currentLabels, lbls) {
+				set := heap.Pop(&c.heap).(SeriesSet)
+				c.currentSets = append(c.currentSets, set)
+			} else {
+				break
+			}
+		}
+
+		// As long as the current set contains at least 1 set,
+		// then it should return true.
+		if len(c.currentSets) != 0 {
+			break
+		}
+	}
+	return true
+}
+
+func (c *genericMergeSeriesSet) At() (labels.Labels, []AggrChunk) {
+	if len(c.currentSets) == 1 {
+		return c.currentSets[0].At()
+	}
+	series := make([]labels.Labels, 0, len(c.currentSets))
+	for _, seriesSet := range c.currentSets {
+		lbls, _ := seriesSet.At()
+		series = append(series, lbls)
+	}
+	return c.mergeFunc(series...), nil
+}
+
+func (c *genericMergeSeriesSet) Err() error {
+	for _, set := range c.sets {
+		if err := set.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type seriesSetHeap []SeriesSet
+
+func (h seriesSetHeap) Len() int      { return len(h) }
+func (h seriesSetHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h seriesSetHeap) Less(i, j int) bool {
+	a, _ := h[i].At()
+	b, _ := h[j].At()
+	return labels.Compare(a, b) < 0
+}
+
+func (h *seriesSetHeap) Push(x interface{}) {
+	*h = append(*h, x.(SeriesSet))
+}
+
+func (h *seriesSetHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
 }
 
 // SeriesSet is a set of series and their corresponding chunks.
