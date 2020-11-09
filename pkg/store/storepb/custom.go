@@ -5,6 +5,7 @@ package storepb
 
 import (
 	"bytes"
+	heap "container/heap"
 	"fmt"
 	"sort"
 	"strconv"
@@ -49,6 +50,17 @@ func NewHintsSeriesResponse(hints *types.Any) *SeriesResponse {
 	}
 }
 
+type emptyRefSet struct{}
+
+func (emptyRefSet) Next() bool                       { return false }
+func (emptyRefSet) At() (labels.Labels, []uint64) { return nil, nil }
+func (emptyRefSet) Err() error                       { return nil }
+
+// EmptySeriesSet returns a new series set that contains no series.
+func EmptyRefSet() RefSeriesSet {
+	return emptyRefSet{}
+}
+
 type emptySeriesSet struct{}
 
 func (emptySeriesSet) Next() bool                       { return false }
@@ -86,6 +98,148 @@ func MergeSeriesSets(all ...SeriesSet) SeriesSet {
 		MergeSeriesSets(all[:h]...),
 		MergeSeriesSets(all[h:]...),
 	)
+}
+
+// RefSeriesSet is a set of series and their corresponding chunks.
+// The set is sorted by the label sets. Chunks may be overlapping or expected of order.
+type RefSeriesSet interface {
+	Next() bool
+	At() (labels.Labels, []uint64)
+	Err() error
+}
+
+// genericMergeSeriesSet implements genericSeriesSet.
+type genericMergeSeriesSet struct {
+	currentLabels labels.Labels
+	mergeFunc     genericSeriesMergeFunc
+
+	heap        genericSeriesSetHeap
+	sets        []RefSeriesSet
+	currentSets []RefSeriesSet
+}
+
+func ChainedSeriesMerge(labels []labels.Labels, refs []uint64) (labels.Labels, []uint64) {
+
+}
+
+type genericSeriesMergeFunc func(labels []labels.Labels, refs []uint64) (labels.Labels, []uint64)
+
+// NewMergeSeriesSet returns a new SeriesSet that merges many SeriesSets together.
+func NewMergeSeriesSet(sets []RefSeriesSet) RefSeriesSet {
+	return newGenericMergeSeriesSet(sets, ChainedSeriesMerge)
+	//return &seriesSetAdapter{newGenericMergeSeriesSet(genericSets, (&seriesMergerAdapter{VerticalSeriesMergeFunc: mergeFunc}).Merge)}
+}
+
+
+// newGenericMergeSeriesSet returns a new genericSeriesSet that merges (and deduplicates)
+// series returned by the series sets when iterating.
+// Each series set must return its series in labels order, otherwise
+// merged series set will be incorrect.
+// Overlapped situations are merged using provided mergeFunc.
+func newGenericMergeSeriesSet(sets []RefSeriesSet, mergeFunc genericSeriesMergeFunc) RefSeriesSet {
+	if len(sets) == 1 {
+		return sets[0]
+	}
+
+	// We are pre-advancing sets, so we can introspect the label of the
+	// series under the cursor.
+	var h genericSeriesSetHeap
+	for _, set := range sets {
+		if set == nil {
+			continue
+		}
+		if set.Next() {
+			heap.Push(&h, set)
+		}
+		if err := set.Err(); err != nil {
+			return errorOnlySeriesSet{err}
+		}
+	}
+	return &genericMergeSeriesSet{
+		mergeFunc: mergeFunc,
+		sets:      sets,
+		heap:      h,
+	}
+}
+
+func (c *genericMergeSeriesSet) Next() bool {
+	// Run in a loop because the "next" series sets may not be valid anymore.
+	// If, for the current label set, all the next series sets come from
+	// failed remote storage sources, we want to keep trying with the next label set.
+	for {
+		// Firstly advance all the current series sets. If any of them have run out,
+		// we can drop them, otherwise they should be inserted back into the heap.
+		for _, set := range c.currentSets {
+			if set.Next() {
+				heap.Push(&c.heap, set)
+			}
+		}
+
+		if len(c.heap) == 0 {
+			return false
+		}
+
+		// Now, pop items of the heap that have equal label sets.
+		c.currentSets = nil
+		c.currentLabels, _ = c.heap[0].At()
+		for len(c.heap) > 0 && labels.Equal(c.currentLabels, c.currentLabels) {
+			set := heap.Pop(&c.heap).(RefSeriesSet)
+			c.currentSets = append(c.currentSets, set)
+		}
+
+		// As long as the current set contains at least 1 set,
+		// then it should return true.
+		if len(c.currentSets) != 0 {
+			break
+		}
+	}
+	return true
+}
+
+func (c *genericMergeSeriesSet) At() (labels.Labels, []uint64) {
+	if len(c.currentSets) == 1 {
+		return c.currentSets[0].At()
+	}
+	series := make([]labels.Labels, 0, len(c.currentSets))
+	seriesRefs := make([]uint64, 0, len(c.currentSets))
+	for _, seriesSet := range c.currentSets {
+		lbls, ref := seriesSet.At()
+		series = append(series, lbls)
+		seriesRefs = append(seriesRefs, ref...)
+	}
+	return c.mergeFunc(series, seriesRefs)
+}
+
+func (c *genericMergeSeriesSet) Err() error {
+	for _, set := range c.sets {
+		if err := set.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type genericSeriesSetHeap []RefSeriesSet
+
+func (h genericSeriesSetHeap) Len() int      { return len(h) }
+func (h genericSeriesSetHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h genericSeriesSetHeap) Less(i, j int) bool {
+	a, _ := h[i].At()
+	b, _ := h[j].At()
+	return labels.Compare(a, b) < 0
+}
+
+func (h *genericSeriesSetHeap) Push(x interface{}) {
+	*h = append(*h, x.(RefSeriesSet))
+}
+
+func (h *genericSeriesSetHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
 }
 
 // SeriesSet is a set of series and their corresponding chunks.

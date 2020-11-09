@@ -649,6 +649,32 @@ type bucketSeriesSet struct {
 	err error
 }
 
+type bucketRefSet struct {
+	set []seriesEntry
+	i   int
+	err error
+}
+
+func newBucketRefSet(set []seriesEntry) *bucketRefSet {
+	return &bucketRefSet{set: set, i: -1}
+}
+
+func (s *bucketRefSet) Next() bool {
+	if s.i >= len(s.set)-1 {
+		return false
+	}
+	s.i++
+	return true
+}
+
+func (s *bucketRefSet) At() (labels.Labels, []uint64) {
+	return s.set[s.i].lset, s.set[s.i].refs
+}
+
+func (s *bucketRefSet) Err() error {
+	return s.err
+}
+
 func newBucketSeriesSet(set []seriesEntry) *bucketSeriesSet {
 	return &bucketSeriesSet{
 		set: set,
@@ -679,14 +705,14 @@ func blockSeries(
 	matchers []*labels.Matcher,
 	req *storepb.SeriesRequest,
 	chunksLimiter ChunksLimiter,
-) (storepb.SeriesSet, *queryStats, error) {
+) (storepb.RefSeriesSet, *queryStats, error) {
 	ps, err := indexr.ExpandedPostings(matchers)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "expanded matching posting")
 	}
 
 	if len(ps) == 0 {
-		return storepb.EmptySeriesSet(), indexr.stats, nil
+		return storepb.EmptyRefSet(), indexr.stats, nil
 	}
 
 	// Preload all series index data.
@@ -711,22 +737,22 @@ func blockSeries(
 			s := seriesEntry{lset: make(labels.Labels, 0, len(lset)+len(extLset))}
 			if !req.SkipChunks {
 				s.refs = make([]uint64, 0, len(chks))
-				s.chks = make([]storepb.AggrChunk, 0, len(chks))
-				for _, meta := range chks {
-					if err := chunkr.addPreload(meta.Ref); err != nil {
-						return nil, nil, errors.Wrap(err, "add chunk preload")
-					}
-					s.chks = append(s.chks, storepb.AggrChunk{
-						MinTime: meta.MinTime,
-						MaxTime: meta.MaxTime,
-					})
-					s.refs = append(s.refs, meta.Ref)
-				}
+				//s.chks = make([]storepb.AggrChunk, 0, len(chks))
+				//for _, meta := range chks {
+				//	if err := chunkr.addPreload(meta.Ref); err != nil {
+				//		return nil, nil, errors.Wrap(err, "add chunk preload")
+				//	}
+				//	s.chks = append(s.chks, storepb.AggrChunk{
+				//		MinTime: meta.MinTime,
+				//		MaxTime: meta.MaxTime,
+				//	})
+				//	s.refs = append(s.refs, meta.Ref)
+				//}
 
-				// Reserve chunksLimiter if we save chunks.
-				if err := chunksLimiter.Reserve(uint64(len(s.chks))); err != nil {
-					return nil, nil, errors.Wrap(err, "exceeded chunks limit")
-				}
+				//// Reserve chunksLimiter if we save chunks.
+				//if err := chunksLimiter.Reserve(uint64(len(s.chks))); err != nil {
+				//	return nil, nil, errors.Wrap(err, "exceeded chunks limit")
+				//}
 			}
 
 			for _, l := range lset {
@@ -746,29 +772,29 @@ func blockSeries(
 		}
 	}
 
-	if req.SkipChunks {
-		return newBucketSeriesSet(res), indexr.stats, nil
-	}
+	//if req.SkipChunks {
+	return newBucketRefSet(res), indexr.stats, nil
+	//}
 
-	// Preload all chunks that were marked in the previous stage.
-	if err := chunkr.preload(); err != nil {
-		return nil, nil, errors.Wrap(err, "preload chunks")
-	}
-
-	// Transform all chunks into the response format.
-	for _, s := range res {
-		for i, ref := range s.refs {
-			chk, err := chunkr.Chunk(ref)
-			if err != nil {
-				return nil, nil, errors.Wrap(err, "get chunk")
-			}
-			if err := populateChunk(&s.chks[i], chk, req.Aggregates); err != nil {
-				return nil, nil, errors.Wrap(err, "populate chunk")
-			}
-		}
-	}
-
-	return newBucketSeriesSet(res), indexr.stats.merge(chunkr.stats), nil
+	//// Preload all chunks that were marked in the previous stage.
+	//if err := chunkr.preload(); err != nil {
+	//	return nil, nil, errors.Wrap(err, "preload chunks")
+	//}
+	//
+	//// Transform all chunks into the response format.
+	//for _, s := range res {
+	//	for i, ref := range s.refs {
+	//		chk, err := chunkr.Chunk(ref)
+	//		if err != nil {
+	//			return nil, nil, errors.Wrap(err, "get chunk")
+	//		}
+	//		if err := populateChunk(&s.chks[i], chk, req.Aggregates); err != nil {
+	//			return nil, nil, errors.Wrap(err, "populate chunk")
+	//		}
+	//	}
+	//}
+	//
+	//return newBucketSeriesSet(res), indexr.stats.merge(chunkr.stats), nil
 }
 
 func populateChunk(out *storepb.AggrChunk, in chunkenc.Chunk, aggrs []storepb.Aggr) error {
@@ -877,7 +903,7 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, srv storepb.Store_Serie
 	var (
 		ctx              = srv.Context()
 		stats            = &queryStats{}
-		res              []storepb.SeriesSet
+		res              []storepb.RefSeriesSet
 		mtx              sync.Mutex
 		g, gctx          = errgroup.WithContext(ctx)
 		resHints         = &hintspb.SeriesResponseHints{}
@@ -1002,26 +1028,63 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, srv storepb.Store_Serie
 
 		// NOTE: We "carefully" assume series and chunks are sorted within each SeriesSet. This should be guaranteed by
 		// blockSeries method. In worst case deduplication logic won't deduplicate correctly, which will be accounted later.
-		set := storepb.MergeSeriesSets(res...)
+		//set := storepb.MergeSeriesSets(res...)
+		set := storepb.NewMergeSeriesSet(res)
 		for set.Next() {
 			var series storepb.Series
 
 			stats.mergedSeriesCount++
 
-			var lset labels.Labels
-			if req.SkipChunks {
-				lset, _ = set.At()
-			} else {
-				lset, series.Chunks = set.At()
+			//var lset labels.Labels
+			lset, refs := set.At()
+			if !req.SkipChunks {
+				series.Chunks = make([]storepb.AggrChunk, 0, len(refs))
+				for _, ref := range refs {
+					if err := chunkr.addPreload(ref); err != nil {
+						return nil, nil, errors.Wrap(err, "add chunk preload")
+					}
+					series.Chunks = append(series.Chunks, storepb.AggrChunk{
+						MinTime: meta.MinTime,
+						MaxTime: meta.MaxTime,
+					})
+				}
 
-				stats.mergedChunksCount += len(series.Chunks)
-				s.metrics.chunkSizeBytes.Observe(float64(chunksSize(series.Chunks)))
+				// Reserve chunksLimiter if we save chunks.
+				if err := chunksLimiter.Reserve(uint64(len(s.chks))); err != nil {
+					return nil, nil, errors.Wrap(err, "exceeded chunks limit")
+				}
+
+				// Preload all chunks that were marked in the previous stage.
+				if err := chunkr.preload(); err != nil {
+					return nil, nil, errors.Wrap(err, "preload chunks")
+				}
+
+				// Transform all chunks into the response format.
+				for _, s := range res {
+					for i, ref := range s.refs {
+						chk, err := chunkr.Chunk(ref)
+						if err != nil {
+							return nil, nil, errors.Wrap(err, "get chunk")
+						}
+						if err := populateChunk(&series.Chunks[i], chk, req.Aggregates); err != nil {
+							return nil, nil, errors.Wrap(err, "populate chunk")
+						}
+					}
+				}
 			}
 			series.Labels = labelpb.ZLabelsFromPromLabels(lset)
 			if err = srv.Send(storepb.NewSeriesResponse(&series)); err != nil {
 				err = status.Error(codes.Unknown, errors.Wrap(err, "send series response").Error())
 				return
 			}
+			//if req.SkipChunks {
+			//	lset, _ = set.At()
+			//} else {
+			//	lset, series.Chunks = set.At()
+			//
+			//	stats.mergedChunksCount += len(series.Chunks)
+			//	s.metrics.chunkSizeBytes.Observe(float64(chunksSize(series.Chunks)))
+			//}
 		}
 		if set.Err() != nil {
 			err = status.Error(codes.Unknown, errors.Wrap(set.Err(), "expand series set").Error())
