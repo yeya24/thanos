@@ -6,6 +6,7 @@ package objstore
 import (
 	"bytes"
 	"context"
+	"github.com/minio/minio-go/v7"
 	"io"
 	"os"
 	"path/filepath"
@@ -117,6 +118,18 @@ func TryToGetSize(r io.Reader) (int64, error) {
 		return int64(f.Len()), nil
 	case *strings.Reader:
 		return f.Size(), nil
+	case *tracingReadCloser:
+		rr, ok := f.r.(*timingReadCloser)
+		if ok {
+			switch ff := rr.ReadCloser.(type) {
+			case *minio.Object:
+				stat, err := ff.Stat()
+				if err != nil {
+					return 0, errors.Wrap(err, "")
+				}
+				return stat.Size, nil
+			}
+		}
 	}
 	return 0, errors.New("unsupported type of io.Reader")
 }
