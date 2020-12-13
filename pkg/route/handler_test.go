@@ -1,7 +1,7 @@
 // Copyright (c) The Thanos Authors.
 // Licensed under the Apache License 2.0.
 
-package receive
+package route
 
 import (
 	"bytes"
@@ -21,6 +21,7 @@ import (
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/prometheus/prometheus/tsdb"
+	terrors "github.com/prometheus/prometheus/tsdb/errors"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,7 +45,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "nil multierror",
-			err:  errutil.NonNilMultiError([]error{}),
+			err:  errutil.MultiError([]error{}),
 		},
 		{
 			name:      "matching simple",
@@ -54,7 +55,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "non-matching multierror",
-			err: errutil.NonNilMultiError([]error{
+			err: terrors.MultiError([]error{
 				errors.New("foo"),
 				errors.New("bar"),
 			}),
@@ -62,7 +63,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "nested non-matching multierror",
-			err: errors.Wrap(errutil.NonNilMultiError([]error{
+			err: errors.Wrap(terrors.MultiError([]error{
 				errors.New("foo"),
 				errors.New("bar"),
 			}), "baz"),
@@ -71,9 +72,9 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "deep nested non-matching multierror",
-			err: errors.Wrap(errutil.NonNilMultiError([]error{
+			err: errors.Wrap(terrors.MultiError([]error{
 				errors.New("foo"),
-				errutil.NonNilMultiError([]error{
+				terrors.MultiError([]error{
 					errors.New("bar"),
 					errors.New("qux"),
 				}),
@@ -83,7 +84,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "matching multierror",
-			err: errutil.NonNilMultiError([]error{
+			err: terrors.MultiError([]error{
 				storage.ErrOutOfOrderSample,
 				errors.New("foo"),
 				errors.New("bar"),
@@ -93,7 +94,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "matching but below threshold multierror",
-			err: errutil.NonNilMultiError([]error{
+			err: errutil.MultiError([]error{
 				storage.ErrOutOfOrderSample,
 				errors.New("foo"),
 				errors.New("bar"),
@@ -103,7 +104,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "matching multierror many",
-			err: errutil.NonNilMultiError([]error{
+			err: terrors.MultiError([]error{
 				storage.ErrOutOfOrderSample,
 				errConflict,
 				status.Error(codes.AlreadyExists, "conflict"),
@@ -115,7 +116,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "matching multierror many, one above threshold",
-			err: errutil.NonNilMultiError([]error{
+			err: errutil.MultiError([]error{
 				storage.ErrOutOfOrderSample,
 				errConflict,
 				tsdb.ErrNotReady,
@@ -128,7 +129,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "matching multierror many, both above threshold, conflict have precedence",
-			err: errutil.NonNilMultiError([]error{
+			err: errutil.MultiError([]error{
 				storage.ErrOutOfOrderSample,
 				errConflict,
 				tsdb.ErrNotReady,
@@ -142,7 +143,7 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "nested matching multierror",
-			err: errors.Wrap(errors.Wrap(errutil.NonNilMultiError([]error{
+			err: errors.Wrap(errors.Wrap(errutil.MultiError([]error{
 				storage.ErrOutOfOrderSample,
 				errors.New("foo"),
 				errors.New("bar"),
@@ -152,8 +153,8 @@ func TestDetermineWriteErrorCause(t *testing.T) {
 		},
 		{
 			name: "deep nested matching multierror",
-			err: errors.Wrap(errutil.NonNilMultiError([]error{
-				errutil.NonNilMultiError([]error{
+			err: errors.Wrap(terrors.MultiError([]error{
+				terrors.MultiError([]error{
 					errors.New("qux"),
 					status.Error(codes.AlreadyExists, "conflict"),
 					status.Error(codes.AlreadyExists, "conflict"),
