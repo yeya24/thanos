@@ -210,6 +210,18 @@ func (s *TSDBStore) LabelNames(ctx context.Context, r *storepb.LabelNamesRequest
 	}
 	defer runutil.CloseWithLogOnErr(s.logger, q, "close tsdb querier label names")
 
+	if len(r.Matchers) > 0 {
+		matchers, err := storepb.TranslateFromPromMatchers(newMatchers...)
+		if err != nil {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
+		q.Select(false, &storage.SelectHints{
+			Start: r.Start,
+			End: r.End,
+			Func: "series",
+		}, r.Matchers)
+	}
+
 	res, _, err := q.LabelNames()
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
@@ -221,6 +233,11 @@ func (s *TSDBStore) LabelNames(ctx context.Context, r *storepb.LabelNamesRequest
 func (s *TSDBStore) LabelValues(ctx context.Context, r *storepb.LabelValuesRequest) (
 	*storepb.LabelValuesResponse, error,
 ) {
+	// First check for matching external label which has priority.
+	if l := s.extLset.Get(r.Label); l != "" {
+		return &storepb.LabelValuesResponse{Values: []string{l}}, nil
+	}
+
 	q, err := s.db.ChunkQuerier(ctx, r.Start, r.End)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())

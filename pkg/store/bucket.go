@@ -1111,6 +1111,7 @@ func (s *BucketStore) LabelNames(ctx context.Context, req *storepb.LabelNamesReq
 				extRes = append(extRes, lName)
 			}
 
+			labelpb.ExtendSortedLabels()
 			sort.Strings(res)
 			sort.Strings(extRes)
 
@@ -1175,6 +1176,12 @@ func (s *BucketStore) LabelValues(ctx context.Context, req *storepb.LabelValuesR
 		}
 
 		resHints.AddQueriedBlock(b.meta.ULID)
+
+		// First check for matching external label which has priority.
+		if l := b.extLset.Get(req.Label); l != "" {
+			sets = append(sets, []string{l})
+			continue
+		}
 
 		indexr := b.indexReader(gctx)
 		extLabels := b.meta.Thanos.Labels
