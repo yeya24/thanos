@@ -18,14 +18,14 @@ set -e
 # Shared @ https://gist.github.com/bwplotka/3b853c31ed11e77c975b9df45d105d74
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKG="./pkg/block/indexheader"
-TEST="BenchmarkBinaryReader_LookupSymbol"
+PKG="./pkg/store"
+TEST="BenchmarkTelemeterRealData_Series"
 STEST=${TEST//\//-}
 
 # TODO: Parametrize all via flags.
 RUN="${1}"
 COMMIT=$(git rev-parse --short HEAD)
-BENCH_TIME="2m"
+BENCH_TIME="1m"
 DATE=$(date '+%Y-%m-%d-T%H-%M-%S')
 
 echo "Running ${TEST} (sanitized: ${STEST}) in ${WORK_DIR} for commit ${COMMIT} as ${RUN}"
