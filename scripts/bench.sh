@@ -7,6 +7,7 @@ set -e
 
 # Yolo script allowing nice benchmark framework for iterative work on Go performance.
 # Requirements:
+#  * Install github.com/aclements/perflock (+daemon).
 #  * Prepare worktree if you want to benchmark in background: git worktree add ../thanos_b yolo
 # Example usage:
 #  * Commit changes you want to test against e.g c513dab8752dc69a46e29de7a035680947778593.
@@ -16,24 +17,16 @@ set -e
 
 # Shared @ https://gist.github.com/bwplotka/3b853c31ed11e77c975b9df45d105d74
 
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-# TODO: Hardcoded for current use ):
-WORK_DIR="${DIR}/../../../prometheus_b"
-
-# TODO: Hardcoded, change it, or parametrize.
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG="./pkg/store"
 TEST="BenchmarkTelemeterRealData_Series"
 STEST=${TEST//\//-}
 
 # TODO: Parametrize all via flags.
 RUN="${1}"
-COMMIT="${2}"
+COMMIT=$(git rev-parse --short HEAD)
 BENCH_TIME="2m"
 DATE=$(date '+%Y-%m-%d-T%H-%M-%S')
-
-echo "Checking out ${COMMIT} in ${WORK_DIR}"
-cd "${WORK_DIR}"
-git reset --hard "${COMMIT}"
 
 echo "Running ${TEST} (sanitized: ${STEST}) in ${WORK_DIR} for commit ${COMMIT} as ${RUN}"
 TEST_DIR="${DIR}/results/${STEST}/${RUN}"
