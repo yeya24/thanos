@@ -1365,6 +1365,15 @@ func (s *bucketBlockSet) labelMatchers(matchers ...*labels.Matcher) ([]*labels.M
 	return res, true
 }
 
+const valueSymbolsCacheSize = 1024
+
+var zeroIndexSymbol = indexSymbol{index: 0, symbol: ""}
+
+type indexSymbol struct {
+	index  uint32
+	symbol string
+}
+
 // bucketBlock represents a block that is located in a bucket. It holds intermediate
 // state for the block on local disk.
 type bucketBlock struct {
@@ -1388,6 +1397,9 @@ type bucketBlock struct {
 	// Block's labels used by block-level matchers to filter blocks to query. These are used to select blocks using
 	// request hints' BlockMatchers.
 	relabelLabels labels.Labels
+
+	valuesMutex  sync.RWMutex
+	valueSymbols [valueSymbolsCacheSize]indexSymbol
 }
 
 func newBucketBlock(
@@ -1535,6 +1547,7 @@ type bucketIndexReader struct {
 
 	mtx          sync.Mutex
 	loadedSeries map[uint64][]byte
+	valueSymbols [valueSymbolsCacheSize]indexSymbol
 }
 
 func newBucketIndexReader(ctx context.Context, block *bucketBlock) *bucketIndexReader {
@@ -1547,6 +1560,11 @@ func newBucketIndexReader(ctx context.Context, block *bucketBlock) *bucketIndexR
 		stats:        &queryStats{},
 		loadedSeries: map[uint64][]byte{},
 	}
+	block.valuesMutex.RLock()
+	for k, v := range block.valueSymbols {
+		r.valueSymbols[k] = v
+	}
+	block.valuesMutex.RUnlock()
 	return r
 }
 
@@ -2104,6 +2122,15 @@ func (r *bucketIndexReader) LoadSeriesForTime(ref uint64, lset *[]symbolizedLabe
 // Close released the underlying resources of the reader.
 func (r *bucketIndexReader) Close() error {
 	r.block.pendingReaders.Done()
+
+	r.block.valuesMutex.Lock()
+	for k, v := range r.valueSymbols {
+		// Only update the cache if the block cache entry is not set.
+		if v != zeroIndexSymbol && r.block.valueSymbols[k] == zeroIndexSymbol {
+			r.block.valueSymbols[k] = v
+		}
+	}
+	r.block.valuesMutex.Unlock()
 	return nil
 }
 
@@ -2115,9 +2142,17 @@ func (r *bucketIndexReader) LookupLabelsSymbols(symbolized []symbolizedLabel, lb
 		if err != nil {
 			return errors.Wrap(err, "lookup label name")
 		}
-		lv, err := r.dec.LookupSymbol(s.value)
-		if err != nil {
-			return errors.Wrap(err, "lookup label value")
+		var lv string
+		cacheIndex := s.value % valueSymbolsCacheSize
+		if cached := r.valueSymbols[cacheIndex]; cached.index == s.value && cached.symbol != "" {
+			lv = cached.symbol
+		} else {
+			lv, err = r.dec.LookupSymbol(s.value)
+			if err != nil {
+				return errors.Wrap(err, "lookup label value")
+			}
+			r.valueSymbols[cacheIndex].index = s.value
+			r.valueSymbols[cacheIndex].symbol = lv
 		}
 		*lbls = append(*lbls, labels.Label{Name: ln, Value: lv})
 	}
