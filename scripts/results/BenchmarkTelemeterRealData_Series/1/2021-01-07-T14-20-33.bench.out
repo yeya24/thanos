@@ -1,0 +1,24 @@
+86723111 BenchmarkTelemeterRealData_Series ./pkg/store 2h 1m  on core #3
+86723111 comm
+5785b302 Fixed BinaryReader receiver and added CHANGELOG entry
+e945bc66 Fix race condition in BinaryReader.LookupSymbol()
+1dc626d0 chore(tutorials): fix some broken links in 2-lts (#3702)
+af5e9c45 fixed broken links (#3645)
+12c826a8 Delete deletion-mark.json at last when deleting a block (#3661)
+386c4724 CHANGELOG.md: add v0.16.0 link (#3697)
+3f72a6fe CHANGELOG.md: note that a release is in progress (#3696)
+0aa07118 mixin: Add block deletion panels for compactor dashboard (#3380)
+7a65a85b fix: prevent rule crash from no such host error (#3672)
+-------- BEGIN BENCHMARK --------
+goos: linux
+goarch: amd64
+pkg: github.com/thanos-io/thanos/pkg/store
+BenchmarkTelemeterRealData_Series/alerts2w/01EPXBGA0413QZMTF4XQ0M4Q3E         	       6	10803870982 ns/op	4176746141 B/op	34641395 allocs/op
+BenchmarkTelemeterRealData_Series/alerts15s/01EPXBGA0413QZMTF4XQ0M4Q3E        	      10	6811728248 ns/op	1835293470 B/op	21471631 allocs/op
+BenchmarkTelemeterRealData_Series/subssyncs2w/01EPXBGA0413QZMTF4XQ0M4Q3E      	      61	1161069965 ns/op	443734084 B/op	 2410477 allocs/op
+BenchmarkTelemeterRealData_Series/subs2w/01EPXBGA0413QZMTF4XQ0M4Q3E           	      10	6426366109 ns/op	2330464958 B/op	13828629 allocs/op
+BenchmarkTelemeterRealData_Series/subs2w1account/01EPXBGA0413QZMTF4XQ0M4Q3E   	      33	1998618592 ns/op	662301678 B/op	 2982435 allocs/op
+BenchmarkTelemeterRealData_Series/subs15m1account/01EPXBGA0413QZMTF4XQ0M4Q3E  	      32	2017229044 ns/op	662326548 B/op	 2982456 allocs/op
+BenchmarkTelemeterRealData_Series/subs15s/01EPXBGA0413QZMTF4XQ0M4Q3E          	      22	3354059737 ns/op	858462150 B/op	 7792898 allocs/op
+PASS
+ok  	github.com/thanos-io/thanos/pkg/store	655.603s
