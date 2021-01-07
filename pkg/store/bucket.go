@@ -1525,6 +1525,8 @@ func (b *bucketBlock) Close() error {
 	return b.indexHeaderReader.Close()
 }
 
+const valueSymbolsCacheSize = 1024
+
 // bucketIndexReader is a custom index reader (not conforming index.Reader interface) that reads index that is stored in
 // object storage without having to fully download it.
 type bucketIndexReader struct {
@@ -1535,6 +1537,10 @@ type bucketIndexReader struct {
 
 	mtx          sync.Mutex
 	loadedSeries map[uint64][]byte
+	valueSymbols   [valueSymbolsCacheSize]struct {
+		index  uint32
+		symbol string
+	}
 }
 
 func newBucketIndexReader(ctx context.Context, block *bucketBlock) *bucketIndexReader {
@@ -2115,9 +2121,17 @@ func (r *bucketIndexReader) LookupLabelsSymbols(symbolized []symbolizedLabel, lb
 		if err != nil {
 			return errors.Wrap(err, "lookup label name")
 		}
-		lv, err := r.dec.LookupSymbol(s.value)
-		if err != nil {
-			return errors.Wrap(err, "lookup label value")
+		var lv string
+		cacheIndex := s.value % valueSymbolsCacheSize
+		if cached := r.valueSymbols[cacheIndex]; cached.index == s.value && cached.symbol != "" {
+			lv = cached.symbol
+		} else {
+			lv, err = r.dec.LookupSymbol(s.value)
+			if err != nil {
+				return errors.Wrap(err, "lookup label value")
+			}
+			r.valueSymbols[cacheIndex].index = s.value
+			r.valueSymbols[cacheIndex].symbol = lv
 		}
 		*lbls = append(*lbls, labels.Label{Name: ln, Value: lv})
 	}
