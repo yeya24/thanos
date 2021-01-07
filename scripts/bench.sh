@@ -18,7 +18,7 @@ set -e
 # Shared @ https://gist.github.com/bwplotka/3b853c31ed11e77c975b9df45d105d74
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKG="./block/indexheader"
+PKG="./pkg/block/indexheader"
 TEST="BenchmarkBinaryReader_LookupSymbol"
 STEST=${TEST//\//-}
 
