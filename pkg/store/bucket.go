@@ -1365,6 +1365,8 @@ func (s *bucketBlockSet) labelMatchers(matchers ...*labels.Matcher) ([]*labels.M
 	return res, true
 }
 
+const valueSymbolsCacheSize = 1024
+
 // bucketBlock represents a block that is located in a bucket. It holds intermediate
 // state for the block on local disk.
 type bucketBlock struct {
@@ -1388,6 +1390,9 @@ type bucketBlock struct {
 	// Block's labels used by block-level matchers to filter blocks to query. These are used to select blocks using
 	// request hints' BlockMatchers.
 	relabelLabels labels.Labels
+
+	valuesMutex  sync.RWMutex
+	valueSymbols [valueSymbolsCacheSize]indexSymbol
 }
 
 func newBucketBlock(
@@ -1525,8 +1530,6 @@ func (b *bucketBlock) Close() error {
 	return b.indexHeaderReader.Close()
 }
 
-const valueSymbolsCacheSize = 1024
-
 // bucketIndexReader is a custom index reader (not conforming index.Reader interface) that reads index that is stored in
 // object storage without having to fully download it.
 type bucketIndexReader struct {
@@ -1537,10 +1540,14 @@ type bucketIndexReader struct {
 
 	mtx          sync.Mutex
 	loadedSeries map[uint64][]byte
-	valueSymbols   [valueSymbolsCacheSize]struct {
-		index  uint32
-		symbol string
-	}
+	valueSymbols [valueSymbolsCacheSize]indexSymbol
+}
+
+var zeroIndexSymbol = indexSymbol{index: 0, symbol: ""}
+
+type indexSymbol struct {
+	index  uint32
+	symbol string
 }
 
 func newBucketIndexReader(ctx context.Context, block *bucketBlock) *bucketIndexReader {
@@ -1553,6 +1560,11 @@ func newBucketIndexReader(ctx context.Context, block *bucketBlock) *bucketIndexR
 		stats:        &queryStats{},
 		loadedSeries: map[uint64][]byte{},
 	}
+	block.valuesMutex.RLock()
+	for k, v := range block.valueSymbols {
+		r.valueSymbols[k] = v
+	}
+	block.valuesMutex.RUnlock()
 	return r
 }
 
@@ -2110,6 +2122,14 @@ func (r *bucketIndexReader) LoadSeriesForTime(ref uint64, lset *[]symbolizedLabe
 // Close released the underlying resources of the reader.
 func (r *bucketIndexReader) Close() error {
 	r.block.pendingReaders.Done()
+	r.block.valuesMutex.Lock()
+
+	for k, v := range r.valueSymbols {
+		if v != zeroIndexSymbol && r.block.valueSymbols[k] == zeroIndexSymbol {
+			r.block.valueSymbols[k] = v
+		}
+	}
+	r.block.valuesMutex.Unlock()
 	return nil
 }
 
