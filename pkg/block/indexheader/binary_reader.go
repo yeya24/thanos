@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 	"time"
 	"unsafe"
 
@@ -439,13 +438,6 @@ type BinaryReader struct {
 	// Cache of the label name symbol lookups,
 	// as there are not many and they are half of all lookups.
 	nameSymbols map[uint32]string
-	// Direct cache of values. This is much faster than an LRU cache and still provides
-	// a reasonable cache hit ratio.
-	valueSymbolsMx sync.Mutex
-	valueSymbols   [valueSymbolsCacheSize]struct {
-		index  uint32
-		symbol string
-	}
 
 	dec *index.Decoder
 
