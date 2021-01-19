@@ -71,7 +71,6 @@ func NewHandler(
 }
 
 func (h *Handler) handleRequest(ctx context.Context, tenant string, wreq *prompb.WriteRequest) error {
-
 	var err error
 	tracing.DoInSpan(ctx, "receive_tsdb_write", func(_ context.Context) {
 		err = h.writer.Write(ctx, tenant, wreq)
@@ -138,7 +137,7 @@ func isConflict(err error) bool {
 	if err == nil {
 		return false
 	}
-	return err == errConflict ||
+	return err == conflictErr ||
 		err == storage.ErrDuplicateSampleForTimestamp ||
 		err == storage.ErrOutOfOrderSample ||
 		err == storage.ErrOutOfBounds ||

@@ -5,8 +5,9 @@ package main
 
 import (
 	"context"
-	"github.com/thanos-io/thanos/pkg/receive"
 	"time"
+
+	"github.com/thanos-io/thanos/pkg/receive"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
@@ -54,7 +55,6 @@ func registerReceiveRoute(app *extkingpin.App) {
 	replicationFactor := cmd.Flag("receive.replication-factor", "How many times to replicate incoming write requests.").Default("1").Uint64()
 
 	forwardTimeout := extkingpin.ModelDuration(cmd.Flag("receive-forward-timeout", "Timeout for each forward request.").Default("5s").Hidden())
-
 
 	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ <-chan struct{}, _ bool) error {
 
@@ -164,7 +164,7 @@ func runReceiveRoute(
 		{
 			ctx, cancel := context.WithCancel(context.Background())
 			g.Add(func() error {
-				return route.HashringFromConfig(ctx, updates, cw)
+				return route.HashringFromConfigWatcher(ctx, updates, cw)
 			}, func(error) {
 				cancel()
 			})
@@ -222,4 +222,3 @@ func runReceiveRoute(
 	level.Info(logger).Log("msg", "starting receive-route")
 	return nil
 }
-
