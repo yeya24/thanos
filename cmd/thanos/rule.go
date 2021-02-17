@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"github.com/prometheus/prometheus/notifier"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -204,7 +205,7 @@ func registerRule(app *extkingpin.App) {
 			*ruleFiles,
 			objStoreConfig,
 			tsdbOpts,
-			alertQueryURL,
+			alertQueryURL.String(),
 			*alertExcludeLabels,
 			*queries,
 			*fileSDFiles,
@@ -294,7 +295,7 @@ func runRule(
 	ruleFiles []string,
 	objStoreConfig *extflag.PathOrContent,
 	tsdbOpts *tsdb.Options,
-	alertQueryURL *url.URL,
+	alertQueryURL string,
 	alertExcludeLabels []string,
 	queryAddrs []string,
 	querySDFiles []string,
@@ -427,23 +428,28 @@ func runRule(
 	}
 
 	var (
-		ruleMgr *thanosrules.Manager
-		alertQ  = alert.NewQueue(logger, reg, 10000, 100, labelsTSDBToProm(lset), alertExcludeLabels)
+		ruleMgr         *thanosrules.Manager
+		alertQ          = alert.NewQueue(logger, reg, 10000, 100, labelsTSDBToProm(lset), alertExcludeLabels)
+		notifierManager = notifier.NewManager(&notifier.Options{
+			QueueCapacity:  10000,
+			Registerer:     reg,
+			ExternalLabels: labelsTSDBToProm(lset),
+		}, logger)
 	)
 	{
 		// Run rule evaluation and alert notifications.
 		notifyFunc := func(ctx context.Context, expr string, alerts ...*rules.Alert) {
-			res := make([]*alert.Alert, 0, len(alerts))
+			res := make([]*notifier.Alert, 0, len(alerts))
 			for _, alrt := range alerts {
 				// Only send actually firing alerts.
 				if alrt.State == rules.StatePending {
 					continue
 				}
-				a := &alert.Alert{
+				a := &notifier.Alert{
 					StartsAt:     alrt.FiredAt,
 					Labels:       alrt.Labels,
 					Annotations:  alrt.Annotations,
-					GeneratorURL: alertQueryURL.String() + strutil.TableLinkForExpression(expr),
+					GeneratorURL: alertQueryURL + strutil.TableLinkForExpression(expr),
 				}
 				if !alrt.ResolvedAt.IsZero() {
 					a.EndsAt = alrt.ResolvedAt
@@ -452,7 +458,9 @@ func runRule(
 				}
 				res = append(res, a)
 			}
-			alertQ.Push(res)
+			if len(alerts) > 0 {
+				notifierManager.Send(res...)
+			}
 		}
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -482,28 +490,6 @@ func runRule(
 		}, func(err error) {
 			cancel()
 			ruleMgr.Stop()
-		})
-	}
-	// Run the alert sender.
-	{
-		sdr := alert.NewSender(logger, reg, alertmgrs)
-		ctx, cancel := context.WithCancel(context.Background())
-		ctx = tracing.ContextWithTracer(ctx, tracer)
-
-		g.Add(func() error {
-			for {
-				tracing.DoInSpan(ctx, "/send_alerts", func(ctx context.Context) {
-					sdr.Send(ctx, alertQ.Pop(ctx.Done()))
-				})
-
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				default:
-				}
-			}
-		}, func(error) {
-			cancel()
 		})
 	}
 
@@ -604,7 +590,7 @@ func runRule(
 		logMiddleware := logging.NewHTTPServerMiddleware(logger, opts...)
 
 		// TODO(bplotka in PR #513 review): pass all flags, not only the flags needed by prefix rewriting.
-		ui.NewRuleUI(logger, reg, ruleMgr, alertQueryURL.String(), webExternalPrefix, webPrefixHeaderName).Register(router, ins)
+		ui.NewRuleUI(logger, reg, ruleMgr, alertQueryURL, webExternalPrefix, webPrefixHeaderName).Register(router, ins)
 
 		api := v1.NewRuleAPI(logger, reg, thanosrules.NewGRPCClient(ruleMgr), ruleMgr, flagsMap)
 		api.Register(router.WithPrefix("/api/v1"), tracer, logger, ins, logMiddleware)
