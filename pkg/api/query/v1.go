@@ -40,6 +40,8 @@ import (
 	"github.com/prometheus/prometheus/storage"
 
 	"github.com/thanos-io/thanos/pkg/api"
+	"github.com/thanos-io/thanos/pkg/exemplars"
+	"github.com/thanos-io/thanos/pkg/exemplars/exemplarspb"
 	extpromhttp "github.com/thanos-io/thanos/pkg/extprom/http"
 	"github.com/thanos-io/thanos/pkg/gate"
 	"github.com/thanos-io/thanos/pkg/logging"
@@ -73,11 +75,13 @@ type QueryAPI struct {
 	queryEngine func(int64) *promql.Engine
 	ruleGroups  rules.UnaryClient
 	metadatas   metadata.UnaryClient
+	exemplars   exemplars.UnaryClient
 
 	enableAutodownsampling              bool
 	enableQueryPartialResponse          bool
 	enableRulePartialResponse           bool
 	enableMetricMetadataPartialResponse bool
+	enableExemplarPartialResponse       bool
 	disableCORS                         bool
 
 	replicaLabels []string
@@ -96,6 +100,7 @@ func NewQueryAPI(
 	c query.QueryableCreator,
 	ruleGroups rules.UnaryClient,
 	metadatas metadata.UnaryClient,
+	exemplars exemplars.UnaryClient,
 	enableAutodownsampling bool,
 	enableQueryPartialResponse bool,
 	enableRulePartialResponse bool,
@@ -116,6 +121,7 @@ func NewQueryAPI(
 		gate:            gate,
 		ruleGroups:      ruleGroups,
 		metadatas:       metadatas,
+		exemplars:       exemplars,
 
 		enableAutodownsampling:                 enableAutodownsampling,
 		enableQueryPartialResponse:             enableQueryPartialResponse,
@@ -155,6 +161,7 @@ func (qapi *QueryAPI) Register(r *route.Router, tracer opentracing.Tracer, logge
 	r.Get("/rules", instr("rules", NewRulesHandler(qapi.ruleGroups, qapi.enableRulePartialResponse)))
 
 	r.Get("/metadata", instr("metadata", NewMetricMetadataHandler(qapi.metadatas, qapi.enableMetricMetadataPartialResponse)))
+	r.Get("/exemplars", instr("exemplars", NewExemplarsHandler(qapi.exemplars, qapi.enableExemplarPartialResponse)))
 }
 
 type queryData struct {
@@ -680,6 +687,36 @@ func NewRulesHandler(client rules.UnaryClient, enablePartialResponse bool) func(
 			return nil, nil, &api.ApiError{Typ: api.ErrorInternal, Err: errors.Errorf("error retrieving rules: %v", err)}
 		}
 		return groups, warnings, nil
+	}
+}
+
+// NewExemplarsHandler creates handler compatible with HTTP /api/v1/exemplars [link-to-be-added]
+// which uses gRPC Unary Rules API.
+func NewExemplarsHandler(client exemplars.UnaryClient, enablePartialResponse bool) func(*http.Request) (interface{}, []error, *api.ApiError) {
+	ps := storepb.PartialResponseStrategy_ABORT
+	if enablePartialResponse {
+		ps = storepb.PartialResponseStrategy_WARN
+	}
+
+	return func(r *http.Request) (interface{}, []error, *api.ApiError) {
+		typeParam := r.URL.Query().Get("type")
+		typ, ok := exemplarspb.ExemplarsRequest_Type_value[strings.ToUpper(typeParam)]
+		if !ok {
+			if typeParam != "" {
+				return nil, nil, &api.ApiError{Typ: api.ErrorBadData, Err: errors.Errorf("invalid exemplars parameter type='%v'", typeParam)}
+			}
+			typ = int32(exemplarspb.ExemplarsRequest_ALL)
+		}
+
+		req := &exemplarspb.ExemplarsRequest{
+			Type:                    exemplarspb.ExemplarsRequest_Type(typ),
+			PartialResponseStrategy: ps,
+		}
+		exemplarsData, warnings, err := client.Exemplars(r.Context(), req)
+		if err != nil {
+			return nil, nil, &api.ApiError{Typ: api.ErrorInternal, Err: errors.Wrap(err, "retrieving exemplars")}
+		}
+		return exemplarsData, warnings, nil
 	}
 }
 

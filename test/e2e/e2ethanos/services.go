@@ -114,7 +114,7 @@ func NewPrometheusWithSidecar(sharedDir string, netName string, name string, con
 	return prom, sidecar, nil
 }
 
-func NewQuerier(sharedDir, name string, storeAddresses, fileSDStoreAddresses, ruleAddresses, metadataAddresses []string, routePrefix, externalPrefix string) (*Service, error) {
+func NewQuerier(sharedDir, name string, storeAddresses, fileSDStoreAddresses, ruleAddresses, metadataAddresses []string, exemplarAddresses []string, routePrefix, externalPrefix string) (*Service, error) {
 	const replicaLabel = "replica"
 
 	args := e2e.BuildArgs(map[string]string{
@@ -138,6 +138,10 @@ func NewQuerier(sharedDir, name string, storeAddresses, fileSDStoreAddresses, ru
 
 	for _, addr := range metadataAddresses {
 		args = append(args, "--metadata="+addr)
+	}
+
+	for _, addr := range exemplarAddresses {
+		args = append(args, "--exemplar="+addr)
 	}
 
 	if len(fileSDStoreAddresses) > 0 {

@@ -32,6 +32,7 @@ import (
 	"github.com/thanos-io/thanos/pkg/component"
 	"github.com/thanos-io/thanos/pkg/discovery/cache"
 	"github.com/thanos-io/thanos/pkg/discovery/dns"
+	"github.com/thanos-io/thanos/pkg/exemplars"
 	"github.com/thanos-io/thanos/pkg/extgrpc"
 	"github.com/thanos-io/thanos/pkg/extkingpin"
 	"github.com/thanos-io/thanos/pkg/extprom"
@@ -103,6 +104,9 @@ func registerQuery(app *extkingpin.App) {
 	metadataEndpoints := cmd.Flag("metadata", "Experimental: Addresses of statically configured metadata API servers (repeatable). The scheme may be prefixed with 'dns+' or 'dnssrv+' to detect metadata API servers through respective DNS lookups.").
 		Hidden().PlaceHolder("<metadata>").Strings()
 
+	exemplarEndpoints := cmd.Flag("exemplar", "Experimental: Addresses of statically configured exemplars API servers (repeatable). The scheme may be prefixed with 'dns+' or 'dnssrv+' to detect exemplars API servers through respective DNS lookups.").
+		Hidden().PlaceHolder("<exemplar>").Strings()
+
 	strictStores := cmd.Flag("store-strict", "Addresses of only statically configured store API servers that are always used, even if the health check fails. Useful if you have a caching layer on top.").
 		PlaceHolder("<staticstore>").Strings()
 
@@ -157,6 +161,10 @@ func registerQuery(app *extkingpin.App) {
 
 		if dup := firstDuplicate(*metadataEndpoints); dup != "" {
 			return errors.Errorf("Address %s is duplicated for --metadata flag.", dup)
+		}
+
+		if dup := firstDuplicate(*exemplarEndpoints); dup != "" {
+			return errors.Errorf("Address %s is duplicated for --exemplar flag.", dup)
 		}
 
 		httpLogOpts, err := logging.ParseHTTPOptions(*reqLogDecision, reqLogConfig)
@@ -223,6 +231,7 @@ func registerQuery(app *extkingpin.App) {
 			*stores,
 			*ruleEndpoints,
 			*metadataEndpoints,
+			*exemplarEndpoints,
 			*enableAutodownsampling,
 			*enableQueryPartialResponse,
 			*enableRulePartialResponse,
@@ -279,6 +288,7 @@ func runQuery(
 	storeAddrs []string,
 	ruleAddrs []string,
 	metadataAddrs []string,
+	exemplarAddrs []string,
 	enableAutodownsampling bool,
 	enableQueryPartialResponse bool,
 	enableRulePartialResponse bool,
@@ -329,6 +339,12 @@ func runQuery(
 		dns.ResolverType(dnsSDResolver),
 	)
 
+	dnsExemplarProvider := dns.NewProvider(
+		logger,
+		extprom.WrapRegistererWithPrefix("thanos_query_exemplar_apis_", reg),
+		dns.ResolverType(dnsSDResolver),
+	)
+
 	var (
 		stores = query.NewStoreSet(
 			logger,
@@ -359,7 +375,13 @@ func runQuery(
 				for _, addr := range dnsMetadataProvider.Addresses() {
 					specs = append(specs, query.NewGRPCStoreSpec(addr, false))
 				}
+				return specs
+			},
 
+			func() (specs []query.ExemplarSpec) {
+				for _, addr := range dnsExemplarProvider.Addresses() {
+					specs = append(specs, query.NewGRPCStoreSpec(addr, false))
+				}
 				return specs
 			},
 			dialOpts,
@@ -368,6 +390,7 @@ func runQuery(
 		proxy            = store.NewProxyStore(logger, reg, stores.Get, component.Query, selectorLset, storeResponseTimeout)
 		rulesProxy       = rules.NewProxy(logger, stores.GetRulesClients)
 		metadataProxy    = metadata.NewProxy(logger, stores.GetMetadataClients)
+		exemplarsProxy   = exemplars.NewProxy(logger, stores.GetExemplarsClients)
 		queryableCreator = query.NewQueryableCreator(
 			logger,
 			extprom.WrapRegistererWithPrefix("thanos_query_", reg),
@@ -457,6 +480,9 @@ func runQuery(
 				if err := dnsMetadataProvider.Resolve(resolveCtx, metadataAddrs); err != nil {
 					level.Error(logger).Log("msg", "failed to resolve addresses for metadataAPIs", "err", err)
 				}
+				if err := dnsExemplarProvider.Resolve(resolveCtx, exemplarAddrs); err != nil {
+					level.Error(logger).Log("msg", "failed to resolve addresses for exemplarsAPI", "err", err)
+				}
 				return nil
 			})
 		}, func(error) {
@@ -505,6 +531,7 @@ func runQuery(
 			// NOTE: Will share the same replica label as the query for now.
 			rules.NewGRPCClientWithDedup(rulesProxy, queryReplicaLabels),
 			metadata.NewGRPCClient(metadataProxy),
+			exemplars.NewGRPCClientWithDedup(exemplarsProxy, queryReplicaLabels),
 			enableAutodownsampling,
 			enableQueryPartialResponse,
 			enableRulePartialResponse,
@@ -551,6 +578,7 @@ func runQuery(
 			grpcserver.WithServer(store.RegisterStoreServer(proxy)),
 			grpcserver.WithServer(rules.RegisterRulesServer(rulesProxy)),
 			grpcserver.WithServer(metadata.RegisterMetadataServer(metadataProxy)),
+			grpcserver.WithServer(exemplars.RegisterExemplarsServer(exemplarsProxy)),
 			grpcserver.WithListen(grpcBindAddr),
 			grpcserver.WithGracePeriod(grpcGracePeriod),
 			grpcserver.WithTLSConfig(tlsCfg),

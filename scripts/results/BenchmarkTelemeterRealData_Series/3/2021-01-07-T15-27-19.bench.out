@@ -1,0 +1,24 @@
+6a32333f BenchmarkTelemeterRealData_Series ./pkg/store 2h 1m  on core #3
+6a32333f new
+ee3a7a79 a
+2d047b4c upate scripts
+69896abf test
+120c3f90 use lock in bucket level
+2ad906d7 fiox
+87bf9d0b fix bench
+da492b38 add bench
+5785b302 Fixed BinaryReader receiver and added CHANGELOG entry
+e945bc66 Fix race condition in BinaryReader.LookupSymbol()
+-------- BEGIN BENCHMARK --------
+goos: linux
+goarch: amd64
+pkg: github.com/thanos-io/thanos/pkg/store
+BenchmarkTelemeterRealData_Series/alerts2w/01EPXBGA0413QZMTF4XQ0M4Q3E         	       6	10737040859 ns/op	4176872336 B/op	34648977 allocs/op
+BenchmarkTelemeterRealData_Series/alerts15s/01EPXBGA0413QZMTF4XQ0M4Q3E        	      10	6761053356 ns/op	1835675936 B/op	21483384 allocs/op
+BenchmarkTelemeterRealData_Series/subssyncs2w/01EPXBGA0413QZMTF4XQ0M4Q3E      	      67	1057708249 ns/op	443768470 B/op	 2410518 allocs/op
+BenchmarkTelemeterRealData_Series/subs2w/01EPXBGA0413QZMTF4XQ0M4Q3E           	      12	5866859744 ns/op	2330493406 B/op	13828638 allocs/op
+BenchmarkTelemeterRealData_Series/subs2w1account/01EPXBGA0413QZMTF4XQ0M4Q3E   	      34	1821169912 ns/op	662347103 B/op	 2982501 allocs/op
+BenchmarkTelemeterRealData_Series/subs15m1account/01EPXBGA0413QZMTF4XQ0M4Q3E  	      34	1869168086 ns/op	662345914 B/op	 2982497 allocs/op
+BenchmarkTelemeterRealData_Series/subs15s/01EPXBGA0413QZMTF4XQ0M4Q3E          	      22	3272150193 ns/op	780222936 B/op	 7792718 allocs/op
+PASS
+ok  	github.com/thanos-io/thanos/pkg/store	652.459s

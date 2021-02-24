@@ -31,6 +31,7 @@ import (
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/thanos-io/thanos/pkg/exemplars/exemplarspb"
 	"github.com/thanos-io/thanos/pkg/metadata/metadatapb"
 	"github.com/thanos-io/thanos/pkg/rules/rulespb"
 	"github.com/thanos-io/thanos/pkg/runutil"
@@ -757,4 +758,31 @@ func (c *Client) MetadataInGRPC(ctx context.Context, base *url.URL, metric strin
 		Data map[string][]metadatapb.Meta `json:"data"`
 	}
 	return v.Data, c.get2xxResultWithGRPCErrors(ctx, "/metadata HTTP[client]", &u, &v)
+}
+
+// ExemplarsInGRPC returns the exemplars from Prometheus exemplars API. It uses gRPC errors.
+// NOTE: This method is tested in pkg/store/prometheus_test.go against Prometheus.
+func (c *Client) ExemplarsInGRPC(ctx context.Context, base *url.URL, typeExemplars string) ([]*exemplarspb.ExemplarData, error) {
+	u := *base
+	u.Path = path.Join(u.Path, "/api/v1/exemplars")
+
+	if typeExemplars != "" {
+		q := u.Query()
+		q.Add("type", typeExemplars)
+		u.RawQuery = q.Encode()
+	}
+
+	var m struct {
+		Data []*exemplarspb.ExemplarData `json:"data"`
+	}
+
+	if err := c.get2xxResultWithGRPCErrors(ctx, "/prom_exemplars HTTP[client]", &u, &m); err != nil {
+		return nil, err
+	}
+
+	// Prometheus does not support PartialResponseStrategy, and probably would never do. Make it Abort by default.
+	for _, g := range m.Data {
+		g.PartialResponseStrategy = storepb.PartialResponseStrategy_ABORT
+	}
+	return m.Data, nil
 }
