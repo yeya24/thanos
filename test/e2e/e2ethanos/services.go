@@ -202,14 +202,13 @@ func NewReceiver(sharedDir string, networkName string, name string) (*Service, e
 		DefaultImage(),
 		// TODO(bwplotka): BuildArgs should be interface.
 		e2e.NewCommand("receive", e2e.BuildArgs(map[string]string{
-			"--debug.name":           fmt.Sprintf("receive-%v", name),
-			"--grpc-address":         ":9091",
-			"--grpc-grace-period":    "0s",
-			"--http-address":         ":8080",
-			"--remote-write.address": ":8081",
-			"--label":                fmt.Sprintf(`receive="%s"`, name),
-			"--tsdb.path":            filepath.Join(container, "data"),
-			"--log.level":            infoLogLevel,
+			"--debug.name":        fmt.Sprintf("receive-%v", name),
+			"--grpc-address":      ":9091",
+			"--grpc-grace-period": "0s",
+			"--http-address":      ":8080",
+			"--label":             fmt.Sprintf(`receive="%s"`, name),
+			"--tsdb.path":         filepath.Join(container, "data"),
+			"--log.level":         infoLogLevel,
 		})...),
 		e2e.NewHTTPReadinessProbe(8080, "/-/ready", 200, 200),
 		8080,
@@ -265,7 +264,7 @@ func NewReceiverWithConfigWatcher(sharedDir string, networkName string, name str
 	return receiver, nil
 }
 
-func NewRouter(sharedDir string, networkName string, name string, replicationFactor int, hashring ...route.HashringConfig) (*e2e.HTTPService, error) {
+func NewReceiveRouter(sharedDir string, networkName string, name string, replicationFactor int, hashring ...route.HashringConfig) (*e2e.HTTPService, error) {
 
 	dir := filepath.Join(sharedDir, "data", "receive-route", name)
 	container := filepath.Join(e2e.ContainerSharedDir, "data", "receive-route", name)
