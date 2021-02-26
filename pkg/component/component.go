@@ -105,6 +105,4 @@ var (
 	Store           = storeAPI{component: component{name: "store"}}
 	UnknownStoreAPI = storeAPI{component: component{name: "unknown-store-api"}}
 	Query           = storeAPI{component: component{name: "query"}}
-
 )
-

@@ -108,16 +108,6 @@ Flags:
                                  TLS CA to verify clients against. If no client
                                  CA is specified, there is no client
                                  verification on server side. (tls.NoClientCert)
-      --remote-write.server-tls-cert=""
-                                 TLS Certificate for HTTP server, leave blank to
-                                 disable TLS.
-      --remote-write.server-tls-key=""
-                                 TLS Key for the HTTP server, leave blank to
-                                 disable TLS.
-      --remote-write.server-tls-client-ca=""
-                                 TLS CA to verify clients against. If no client
-                                 CA is specified, there is no client
-                                 verification on server side. (tls.NoClientCert)
       --tsdb.path="./data"       Data directory of TSDB.
       --label=key="value" ...    External labels to announce. This flag will be
                                  removed in the future when handling multiple

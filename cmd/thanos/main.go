@@ -200,4 +200,3 @@ func getFlagsMap(flags []*kingpin.FlagModel) map[string]string {
 
 	return flagsMap
 }
-

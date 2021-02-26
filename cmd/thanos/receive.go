@@ -41,10 +41,6 @@ func registerReceive(app *extkingpin.App) {
 	httpBindAddr, httpGracePeriod := extkingpin.RegisterHTTPFlags(cmd)
 	grpcBindAddr, grpcGracePeriod, grpcCert, grpcKey, grpcClientCA := extkingpin.RegisterGRPCFlags(cmd)
 
-	rwServerCert := cmd.Flag("remote-write.server-tls-cert", "TLS Certificate for HTTP server, leave blank to disable TLS.").Default("").String()
-	rwServerKey := cmd.Flag("remote-write.server-tls-key", "TLS Key for the HTTP server, leave blank to disable TLS.").Default("").String()
-	rwServerClientCA := cmd.Flag("remote-write.server-tls-client-ca", "TLS CA to verify clients against. If no client CA is specified, there is no client verification on server side. (tls.NoClientCert)").Default("").String()
-
 	dataDir := cmd.Flag("tsdb.path", "Data directory of TSDB.").
 		Default("./data").String()
 
@@ -98,9 +94,6 @@ func registerReceive(app *extkingpin.App) {
 			*grpcClientCA,
 			*httpBindAddr,
 			time.Duration(*httpGracePeriod),
-			*rwServerCert,
-			*rwServerKey,
-			*rwServerClientCA,
 			*dataDir,
 			objStoreConfig,
 			tsdbOpts,
@@ -126,9 +119,6 @@ func runReceive(
 	grpcClientCA string,
 	httpBindAddr string,
 	httpGracePeriod time.Duration,
-	rwServerCert string,
-	rwServerKey string,
-	rwServerClientCA string,
 	dataDir string,
 	objStoreConfig *extflag.PathOrContent,
 	tsdbOpts *tsdb.Options,
