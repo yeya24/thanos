@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	cortexutil "github.com/cortexproject/cortex/pkg/util"
 	"github.com/go-kit/kit/log"
 	"github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
@@ -161,7 +162,8 @@ func (qapi *QueryAPI) Register(r *route.Router, tracer opentracing.Tracer, logge
 	r.Get("/rules", instr("rules", NewRulesHandler(qapi.ruleGroups, qapi.enableRulePartialResponse)))
 
 	r.Get("/metadata", instr("metadata", NewMetricMetadataHandler(qapi.metadatas, qapi.enableMetricMetadataPartialResponse)))
-	r.Get("/exemplars", instr("exemplars", NewExemplarsHandler(qapi.exemplars, qapi.enableExemplarPartialResponse)))
+
+	r.Get("/query_exemplars", instr("exemplars", NewExemplarsHandler(qapi.exemplars, qapi.enableExemplarPartialResponse)))
 }
 
 type queryData struct {
@@ -699,17 +701,18 @@ func NewExemplarsHandler(client exemplars.UnaryClient, enablePartialResponse boo
 	}
 
 	return func(r *http.Request) (interface{}, []error, *api.ApiError) {
-		typeParam := r.URL.Query().Get("type")
-		typ, ok := exemplarspb.ExemplarsRequest_Type_value[strings.ToUpper(typeParam)]
-		if !ok {
-			if typeParam != "" {
-				return nil, nil, &api.ApiError{Typ: api.ErrorBadData, Err: errors.Errorf("invalid exemplars parameter type='%v'", typeParam)}
-			}
-			typ = int32(exemplarspb.ExemplarsRequest_ALL)
+		start, err := cortexutil.ParseTime(r.FormValue("start"))
+		if err != nil {
+			return nil, nil, &api.ApiError{Typ: api.ErrorBadData, Err: err}
 		}
-
+		end, err := cortexutil.ParseTime(r.FormValue("end"))
+		if err != nil {
+			return nil, nil, &api.ApiError{Typ: api.ErrorBadData, Err: err}
+		}
 		req := &exemplarspb.ExemplarsRequest{
-			Type:                    exemplarspb.ExemplarsRequest_Type(typ),
+			Start:                   start,
+			End:                     end,
+			Query:                   r.FormValue("query"),
 			PartialResponseStrategy: ps,
 		}
 		exemplarsData, warnings, err := client.Exemplars(r.Context(), req)

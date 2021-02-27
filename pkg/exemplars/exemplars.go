@@ -35,6 +35,26 @@ type exemplarsServer struct {
 	data     []*exemplarspb.ExemplarData
 }
 
+
+func (srv *exemplarsServer) Send(res *exemplarspb.ExemplarsResponse) error {
+	if res.GetWarning() != "" {
+		srv.warnings = append(srv.warnings, errors.New(res.GetWarning()))
+		return nil
+	}
+
+	if res.GetData() == nil {
+		return errors.New("no data")
+	}
+
+	srv.data = append(srv.data, res.GetData())
+	return nil
+}
+
+func (srv *exemplarsServer) Context() context.Context {
+	return srv.ctx
+}
+
+
 func NewGRPCClient(es exemplarspb.ExemplarsServer) *GRPCClient {
 	return NewGRPCClientWithDedup(es, nil)
 }
