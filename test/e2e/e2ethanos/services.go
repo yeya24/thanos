@@ -192,7 +192,6 @@ func NewReceiver(sharedDir string, networkName string, name string) (*Service, e
 
 	dir := filepath.Join(sharedDir, "data", "receive", name)
 	dataDir := filepath.Join(dir, "data")
-	container := filepath.Join(e2e.ContainerSharedDir, "data", "receive", name)
 	if err := os.MkdirAll(dataDir, 0777); err != nil {
 		return nil, errors.Wrap(err, "create receive dir")
 	}
@@ -206,8 +205,6 @@ func NewReceiver(sharedDir string, networkName string, name string) (*Service, e
 			"--grpc-address":      ":9091",
 			"--grpc-grace-period": "0s",
 			"--http-address":      ":8080",
-			"--label":             fmt.Sprintf(`receive="%s"`, name),
-			"--tsdb.path":         filepath.Join(container, "data"),
 			"--log.level":         infoLogLevel,
 		})...),
 		e2e.NewHTTPReadinessProbe(8080, "/-/ready", 200, 200),
@@ -229,7 +226,6 @@ func NewReceiverWithConfigWatcher(sharedDir string, networkName string, name str
 
 	dir := filepath.Join(sharedDir, "data", "receive", name)
 	dataDir := filepath.Join(dir, "data")
-	container := filepath.Join(e2e.ContainerSharedDir, "data", "receive", name)
 	if err := os.MkdirAll(dataDir, 0777); err != nil {
 		return nil, errors.Wrap(err, "create receive dir")
 	}
@@ -251,8 +247,6 @@ func NewReceiverWithConfigWatcher(sharedDir string, networkName string, name str
 			"--grpc-address":      ":9091",
 			"--grpc-grace-period": "0s",
 			"--http-address":      ":8080",
-			"--label":             fmt.Sprintf(`receive="%s"`, name),
-			"--tsdb.path":         filepath.Join(container, "data"),
 			"--log.level":         infoLogLevel,
 		})...),
 		e2e.NewHTTPReadinessProbe(8080, "/-/ready", 200, 200),

@@ -244,7 +244,6 @@ func runReceive(
 			if err := s.ListenAndServe(); err != nil {
 				return errors.Wrap(err, "serve gRPC")
 			}
-			statusProber.Ready()
 			return nil
 		}, func(err error) {
 			s.Shutdown(err)
