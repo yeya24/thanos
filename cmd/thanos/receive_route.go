@@ -142,7 +142,6 @@ func runReceiveRoute(
 
 	// Start all components while we wait for TSDB to open but only load
 	// initial config and mark ourselves as ready after it completed.
-
 	level.Debug(logger).Log("msg", "setting up hashring")
 	{
 		// Note: the hashring configuration watcher
