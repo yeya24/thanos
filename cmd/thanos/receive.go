@@ -194,19 +194,22 @@ func runReceive(
 	}
 
 	level.Debug(logger).Log("msg", "setting up http server")
-	srv := httpserver.New(logger, reg, comp, httpProbe,
-		httpserver.WithListen(httpBindAddr),
-		httpserver.WithGracePeriod(httpGracePeriod),
-	)
-	g.Add(func() error {
-		statusProber.Healthy()
-		err := srv.ListenAndServe()
-		return err
-	}, func(err error) {
-		statusProber.NotReady(err)
-		defer statusProber.NotHealthy(err)
-		srv.Shutdown(err)
-	})
+	{
+		srv := httpserver.New(logger, reg, comp, httpProbe,
+			httpserver.WithListen(httpBindAddr),
+			httpserver.WithGracePeriod(httpGracePeriod),
+		)
+		g.Add(func() error {
+			statusProber.Healthy()
+			err := srv.ListenAndServe()
+			return err
+		}, func(err error) {
+			statusProber.NotReady(err)
+			defer statusProber.NotHealthy(err)
+			srv.Shutdown(err)
+		})
+
+	}
 
 	level.Debug(logger).Log("msg", "setting up grpc server")
 	{

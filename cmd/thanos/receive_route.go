@@ -187,21 +187,23 @@ func runReceiveRoute(
 	}
 
 	level.Debug(logger).Log("msg", "setting up http server")
-	srv := httpserver.New(logger, reg, comp, httpProbe,
-		httpserver.WithListen(httpBindAddr),
-		httpserver.WithGracePeriod(httpGracePeriod),
-	)
-	g.Add(func() error {
-		statusProber.Healthy()
+	{
+		srv := httpserver.New(logger, reg, comp, httpProbe,
+			httpserver.WithListen(httpBindAddr),
+			httpserver.WithGracePeriod(httpGracePeriod),
+		)
+		g.Add(func() error {
+			statusProber.Ready()
+			defer statusProber.Healthy()
 
-		return srv.ListenAndServe()
-	}, func(err error) {
-		statusProber.NotReady(err)
-		defer statusProber.NotHealthy(err)
+			return srv.ListenAndServe()
+		}, func(err error) {
+			statusProber.NotReady(err)
+			defer statusProber.NotHealthy(err)
 
-		srv.Shutdown(err)
-	})
-
+			srv.Shutdown(err)
+		})
+	}
 	level.Debug(logger).Log("msg", "setting up receive http handler")
 	{
 		g.Add(
