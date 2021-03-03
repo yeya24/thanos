@@ -192,6 +192,7 @@ func NewReceiver(sharedDir string, networkName string, name string) (*Service, e
 
 	dir := filepath.Join(sharedDir, "data", "receive", name)
 	dataDir := filepath.Join(dir, "data")
+	container := filepath.Join(e2e.ContainerSharedDir, "data", "receive", name)
 	if err := os.MkdirAll(dataDir, 0777); err != nil {
 		return nil, errors.Wrap(err, "create receive dir")
 	}
@@ -206,6 +207,8 @@ func NewReceiver(sharedDir string, networkName string, name string) (*Service, e
 			"--grpc-grace-period": "0s",
 			"--http-address":      ":8080",
 			"--log.level":         infoLogLevel,
+			"--tsdb.path":         filepath.Join(container, "data"),
+			"--label":             fmt.Sprintf(`receive="%s"`, name),
 		})...),
 		e2e.NewHTTPReadinessProbe(8080, "/-/ready", 200, 200),
 		8080,
@@ -218,7 +221,7 @@ func NewReceiver(sharedDir string, networkName string, name string) (*Service, e
 	return receiver, nil
 }
 
-func NewReceiverWithConfigWatcher(sharedDir string, networkName string, name string, replicationFactor int, hashring ...route.HashringConfig) (*Service, error) {
+func NewReceiverWithConfigWatcher(sharedDir string, networkName string, name string, hashring ...route.HashringConfig) (*Service, error) {
 	localEndpoint := NewService(fmt.Sprintf("receive-%v", name), "", e2e.NewCommand("", ""), nil, 8080, 9091, 8081).GRPCNetworkEndpointFor(networkName)
 	if len(hashring) == 0 {
 		hashring = []route.HashringConfig{{Endpoints: []string{localEndpoint}}}
@@ -226,6 +229,7 @@ func NewReceiverWithConfigWatcher(sharedDir string, networkName string, name str
 
 	dir := filepath.Join(sharedDir, "data", "receive", name)
 	dataDir := filepath.Join(dir, "data")
+	container := filepath.Join(e2e.ContainerSharedDir, "data", "receive", name)
 	if err := os.MkdirAll(dataDir, 0777); err != nil {
 		return nil, errors.Wrap(err, "create receive dir")
 	}
@@ -248,6 +252,8 @@ func NewReceiverWithConfigWatcher(sharedDir string, networkName string, name str
 			"--grpc-grace-period": "0s",
 			"--http-address":      ":8080",
 			"--log.level":         infoLogLevel,
+			"--tsdb.path":         filepath.Join(container, "data"),
+			"--label":             fmt.Sprintf(`receive="%s"`, name),
 		})...),
 		e2e.NewHTTPReadinessProbe(8080, "/-/ready", 200, 200),
 		8080,

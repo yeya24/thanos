@@ -172,10 +172,11 @@ func runReceiveRoute(
 					if !ok {
 						return nil
 					}
-					webHandler.Hashring(h)
 					msg := "hashring has changed; server is not ready to receive web requests"
 					statusProber.NotReady(errors.New(msg))
 					level.Info(logger).Log("msg", msg)
+					webHandler.Hashring(h)
+					statusProber.Ready()
 				case <-cancel:
 					return nil
 				}

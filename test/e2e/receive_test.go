@@ -137,7 +137,7 @@ func TestReceive(t *testing.T) {
 	t.Run("hashring with config watcher", func(t *testing.T) {
 		t.Parallel()
 
-		s, err := e2e.NewScenario("e2e_test_receive_hashring")
+		s, err := e2e.NewScenario("e2e_test_receive_hashring_config_watcher")
 		testutil.Ok(t, err)
 		t.Cleanup(e2ethanos.CleanScenario(t, s))
 
@@ -158,19 +158,23 @@ func TestReceive(t *testing.T) {
 
 		// Recreate again, but with hashring config.
 		// TODO(kakkoyun): Update config file and wait config watcher to reconcile hashring.
-		r1, err = e2ethanos.NewReceiverWithConfigWatcher(s.SharedDir(), s.NetworkName(), "1", 1, h)
+		r1, err = e2ethanos.NewReceiverWithConfigWatcher(s.SharedDir(), s.NetworkName(), "1", h)
 		testutil.Ok(t, err)
-		r2, err = e2ethanos.NewReceiverWithConfigWatcher(s.SharedDir(), s.NetworkName(), "2", 1, h)
+		r2, err = e2ethanos.NewReceiverWithConfigWatcher(s.SharedDir(), s.NetworkName(), "2", h)
 		testutil.Ok(t, err)
-		r3, err = e2ethanos.NewReceiverWithConfigWatcher(s.SharedDir(), s.NetworkName(), "3", 1, h)
+		r3, err = e2ethanos.NewReceiverWithConfigWatcher(s.SharedDir(), s.NetworkName(), "3", h)
 		testutil.Ok(t, err)
-		testutil.Ok(t, s.StartAndWaitReady(r1, r2, r3))
 
-		prom1, _, err := e2ethanos.NewPrometheus(s.SharedDir(), "1", defaultPromConfig("prom1", 0, e2ethanos.RemoteWriteEndpoint(r1.NetworkEndpoint(8081)), ""), e2ethanos.DefaultPrometheusImage())
+		// Create a router.
+		route1, err := e2ethanos.NewReceiveRouter(s.SharedDir(), s.NetworkName(), "1", 1, h)
 		testutil.Ok(t, err)
-		prom2, _, err := e2ethanos.NewPrometheus(s.SharedDir(), "2", defaultPromConfig("prom2", 0, e2ethanos.RemoteWriteEndpoint(r2.NetworkEndpoint(8081)), ""), e2ethanos.DefaultPrometheusImage())
+		testutil.Ok(t, s.StartAndWaitReady(r1, r2, r3, route1))
+
+		prom1, _, err := e2ethanos.NewPrometheus(s.SharedDir(), "1", defaultPromConfig("prom1", 0, e2ethanos.RemoteWriteEndpoint(route1.NetworkEndpoint(8081)), ""), e2ethanos.DefaultPrometheusImage())
 		testutil.Ok(t, err)
-		prom3, _, err := e2ethanos.NewPrometheus(s.SharedDir(), "3", defaultPromConfig("prom3", 0, e2ethanos.RemoteWriteEndpoint(r3.NetworkEndpoint(8081)), ""), e2ethanos.DefaultPrometheusImage())
+		prom2, _, err := e2ethanos.NewPrometheus(s.SharedDir(), "2", defaultPromConfig("prom2", 0, e2ethanos.RemoteWriteEndpoint(route1.NetworkEndpoint(8081)), ""), e2ethanos.DefaultPrometheusImage())
+		testutil.Ok(t, err)
+		prom3, _, err := e2ethanos.NewPrometheus(s.SharedDir(), "3", defaultPromConfig("prom3", 0, e2ethanos.RemoteWriteEndpoint(route1.NetworkEndpoint(8081)), ""), e2ethanos.DefaultPrometheusImage())
 		testutil.Ok(t, err)
 		testutil.Ok(t, s.StartAndWaitReady(prom1, prom2, prom3))
 
