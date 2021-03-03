@@ -6,6 +6,7 @@ package e2e_test
 import (
 	"context"
 	"fmt"
+	"github.com/thanos-io/thanos/pkg/route"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -95,11 +96,21 @@ func TestQuery(t *testing.T) {
 
 	receiver, err := e2ethanos.NewReceiver(s.SharedDir(), s.NetworkName(), "1")
 	testutil.Ok(t, err)
-	testutil.Ok(t, s.StartAndWaitReady(receiver))
+
+	h := route.HashringConfig{
+		Endpoints: []string{
+			receiver.GRPCNetworkEndpointFor(s.NetworkName()),
+		},
+	}
+
+	// Create a router.
+	route1, err := e2ethanos.NewReceiveRouter(s.SharedDir(), s.NetworkName(), "1", 1, h)
+	testutil.Ok(t, err)
+	testutil.Ok(t, s.StartAndWaitReady(receiver, route1))
 
 	prom1, sidecar1, err := e2ethanos.NewPrometheusWithSidecar(s.SharedDir(), "e2e_test_query", "alone", defaultPromConfig("prom-alone", 0, "", ""), e2ethanos.DefaultPrometheusImage())
 	testutil.Ok(t, err)
-	prom2, sidecar2, err := e2ethanos.NewPrometheusWithSidecar(s.SharedDir(), "e2e_test_query", "remote-and-sidecar", defaultPromConfig("prom-both-remote-write-and-sidecar", 1234, e2ethanos.RemoteWriteEndpoint(receiver.NetworkEndpoint(8081)), ""), e2ethanos.DefaultPrometheusImage())
+	prom2, sidecar2, err := e2ethanos.NewPrometheusWithSidecar(s.SharedDir(), "e2e_test_query", "remote-and-sidecar", defaultPromConfig("prom-both-remote-write-and-sidecar", 1234, e2ethanos.RemoteWriteEndpoint(route1.NetworkEndpoint(8081)), ""), e2ethanos.DefaultPrometheusImage())
 	testutil.Ok(t, err)
 	prom3, sidecar3, err := e2ethanos.NewPrometheusWithSidecar(s.SharedDir(), "e2e_test_query", "ha1", defaultPromConfig("prom-ha", 0, "", filepath.Join(e2e.ContainerSharedDir, "", "*.yaml")), e2ethanos.DefaultPrometheusImage())
 	testutil.Ok(t, err)
@@ -128,6 +139,13 @@ func TestQuery(t *testing.T) {
 		{
 			"job":        "myself",
 			"prometheus": "prom-both-remote-write-and-sidecar",
+			"receive":    "1",
+			"replica":    "1234",
+			"tenant_id":  "default-tenant",
+		},
+		{
+			"job":        "myself",
+			"prometheus": "prom-both-remote-write-and-sidecar",
 			"replica":    "1234",
 		},
 		{
@@ -149,6 +167,12 @@ func TestQuery(t *testing.T) {
 		{
 			"job":        "myself",
 			"prometheus": "prom-alone",
+		},
+		{
+			"job":        "myself",
+			"prometheus": "prom-both-remote-write-and-sidecar",
+			"receive":    "1",
+			"tenant_id":  "default-tenant",
 		},
 		{
 			"job":        "myself",
