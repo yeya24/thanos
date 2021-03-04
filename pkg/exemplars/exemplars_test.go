@@ -4,9 +4,7 @@
 package exemplars
 
 import (
-	"fmt"
 	"testing"
-	"time"
 
 	"github.com/thanos-io/thanos/pkg/exemplars/exemplarspb"
 	"github.com/thanos-io/thanos/pkg/store/labelpb"
@@ -15,12 +13,6 @@ import (
 
 func TestMain(m *testing.M) {
 	testutil.TolerantVerifyLeakMain(m)
-}
-
-func TestA(t *testing.T) {
-	tt, err := time.Parse(time.RFC3339, "1614395157.954")
-	fmt.Printf("%v\n", err)
-	fmt.Printf("%v\n", tt)
 }
 
 func TestDedupExemplarsData(t *testing.T) {

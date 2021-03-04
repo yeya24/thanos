@@ -2,12 +2,12 @@ package exemplars
 
 import (
 	"context"
+	"github.com/thanos-io/thanos/pkg/store/labelpb"
 	"sort"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/thanos-io/thanos/pkg/exemplars/exemplarspb"
-	"github.com/thanos-io/thanos/pkg/store/storepb"
 )
 
 var _ UnaryClient = &GRPCClient{}
@@ -35,7 +35,6 @@ type exemplarsServer struct {
 	data     []*exemplarspb.ExemplarData
 }
 
-
 func (srv *exemplarsServer) Send(res *exemplarspb.ExemplarsResponse) error {
 	if res.GetWarning() != "" {
 		srv.warnings = append(srv.warnings, errors.New(res.GetWarning()))
@@ -43,7 +42,7 @@ func (srv *exemplarsServer) Send(res *exemplarspb.ExemplarsResponse) error {
 	}
 
 	if res.GetData() == nil {
-		return errors.New("no data")
+		return errors.New("empty exemplars data")
 	}
 
 	srv.data = append(srv.data, res.GetData())
@@ -53,7 +52,6 @@ func (srv *exemplarsServer) Send(res *exemplarspb.ExemplarsResponse) error {
 func (srv *exemplarsServer) Context() context.Context {
 	return srv.ctx
 }
-
 
 func NewGRPCClient(es exemplarspb.ExemplarsServer) *GRPCClient {
 	return NewGRPCClientWithDedup(es, nil)
@@ -104,15 +102,9 @@ func dedupExemplarsData(exemplarsData []*exemplarspb.ExemplarData, replicaLabels
 	})
 
 	i := 0
-	exemplarsData[i].SeriesLabels.Labels = removeReplicaLabels(
-		exemplarsData[i].SeriesLabels.Labels,
-		replicaLabels,
-	)
+	removeReplicaLabels(exemplarsData[i].SeriesLabels, replicaLabels)
 	for j := 1; j < len(exemplarsData); j++ {
-		exemplarsData[j].SeriesLabels.Labels = removeReplicaLabels(
-			exemplarsData[j].SeriesLabels.Labels,
-			replicaLabels,
-		)
+		removeReplicaLabels(exemplarsData[j].SeriesLabels, replicaLabels)
 		if exemplarsData[i].Compare(exemplarsData[j]) != 0 {
 			// Effectively retain exemplarsData[j] in the resulting slice.
 			i++
@@ -140,9 +132,9 @@ func dedupExemplars(exemplars []*exemplarspb.Exemplar, replicaLabels map[string]
 	})
 
 	i := 0
-	removeReplicaLabels(exemplars[i].Labels.Labels, replicaLabels)
+	removeReplicaLabels(exemplars[i].Labels, replicaLabels)
 	for j := 1; j < len(exemplars); j++ {
-		removeReplicaLabels(exemplars[j].Labels.Labels, replicaLabels)
+		removeReplicaLabels(exemplars[j].Labels, replicaLabels)
 		if exemplars[i].Compare(exemplars[j]) != 0 {
 			// Effectively retain exemplars[j] in the resulting slice.
 			i++
@@ -153,13 +145,13 @@ func dedupExemplars(exemplars []*exemplarspb.Exemplar, replicaLabels map[string]
 	return exemplars[:i+1]
 }
 
-func removeReplicaLabels(labels []storepb.Label, replicaLabels map[string]struct{}) []storepb.Label {
-	newLabels := make([]storepb.Label, 0, len(labels))
-	for _, l := range labels {
+func removeReplicaLabels(labelSet labelpb.ZLabelSet, replicaLabels map[string]struct{}) {
+	newLabels := make([]labelpb.ZLabel, 0, len(labelSet.Labels))
+	for _, l := range labelSet.Labels {
 		if _, ok := replicaLabels[l.Name]; !ok {
 			newLabels = append(newLabels, l)
 		}
 	}
 
-	return newLabels
+	labelSet.Labels = newLabels
 }

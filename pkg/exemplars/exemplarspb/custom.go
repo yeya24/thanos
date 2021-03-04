@@ -4,20 +4,20 @@
 package exemplarspb
 
 import (
+	"encoding/json"
+	"math/big"
+
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/thanos-io/thanos/pkg/store/labelpb"
-	"math/big"
-
-	"encoding/json"
 )
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (m *Exemplar) UnmarshalJSON(b []byte) error {
 	v := struct {
-		Labels labelpb.ZLabelSet
+		Labels    labelpb.ZLabelSet
 		TimeStamp model.Time
-		Value model.SampleValue
+		Value     model.SampleValue
 	}{}
 
 	if err := json.Unmarshal(b, &v); err != nil {
@@ -30,16 +30,16 @@ func (m *Exemplar) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// UnmarshalJSON implements json.Unmarshaler.
+// MarshalJSON implements json.Marshaler.
 func (m *Exemplar) MarshalJSON() ([]byte, error) {
 	v := struct {
-		Labels labels.Labels `json:"labels"`
-		TimeStamp model.Time `json:"timestamp"`
-		Value model.SampleValue `json:"value"`
+		Labels    labels.Labels     `json:"labels"`
+		TimeStamp model.Time        `json:"timestamp"`
+		Value     model.SampleValue `json:"value"`
 	}{
-		Labels: labelpb.ZLabelsToPromLabels(m.Labels.Labels),
+		Labels:    labelpb.ZLabelsToPromLabels(m.Labels.Labels),
 		TimeStamp: model.Time(m.Ts),
-		Value: model.SampleValue(m.Value),
+		Value:     model.SampleValue(m.Value),
 	}
 	return json.Marshal(v)
 }
@@ -60,50 +60,48 @@ func NewWarningExemplarsResponse(warning error) *ExemplarsResponse {
 	}
 }
 
-
-
-func (s1 *ExemplarData) Compare(s2 *ExemplarData) int {
-	if d := labels.Compare(s1.SeriesLabels.PromLabels(), s2.SeriesLabels.PromLabels()); d != 0 {
+func (m *ExemplarData) Compare(other *ExemplarData) int {
+	if d := labels.Compare(m.SeriesLabels.PromLabels(), other.SeriesLabels.PromLabels()); d != 0 {
 		return d
 	}
 	return 0
 }
 
-func (s *ExemplarData) SetSeriesLabels(ls labels.Labels) {
+func (m *ExemplarData) SetSeriesLabels(ls labels.Labels) {
 	var result labelpb.ZLabelSet
 
 	if len(ls) > 0 {
 		result = labelpb.ZLabelSet{Labels: labelpb.ZLabelsFromPromLabels(ls)}
 	}
 
-	s.SeriesLabels = result
+	m.SeriesLabels = result
 }
 
-func (e *Exemplar) SetLabels(ls labels.Labels) {
+func (m *Exemplar) SetLabels(ls labels.Labels) {
 	var result labelpb.ZLabelSet
 
 	if len(ls) > 0 {
 		result = labelpb.ZLabelSet{Labels: labelpb.ZLabelsFromPromLabels(ls)}
 	}
 
-	e.Labels = result
+	m.Labels = result
 }
 
-func (e1 *Exemplar) Compare(e2 *Exemplar) int {
-	if d := labels.Compare(e1.Labels.PromLabels(), e2.Labels.PromLabels()); d != 0 {
+func (m *Exemplar) Compare(other *Exemplar) int {
+	if d := labels.Compare(m.Labels.PromLabels(), other.Labels.PromLabels()); d != 0 {
 		return d
 	}
 
-	if e1.Hasts && e2.Hasts {
-		if e1.Ts < e2.Ts {
+	if m.Hasts && other.Hasts {
+		if m.Ts < other.Ts {
 			return 1
 		}
-		if e1.Ts > e2.Ts {
+		if m.Ts > other.Ts {
 			return -1
 		}
 	}
 
-	if d := big.NewFloat(e1.Value).Cmp(big.NewFloat(e2.Value)); d != 0 {
+	if d := big.NewFloat(m.Value).Cmp(big.NewFloat(other.Value)); d != 0 {
 		return d
 	}
 
