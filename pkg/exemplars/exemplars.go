@@ -2,12 +2,12 @@ package exemplars
 
 import (
 	"context"
-	"github.com/thanos-io/thanos/pkg/store/labelpb"
 	"sort"
 
 	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/storage"
 	"github.com/thanos-io/thanos/pkg/exemplars/exemplarspb"
+	"github.com/thanos-io/thanos/pkg/store/labelpb"
 )
 
 var _ UnaryClient = &GRPCClient{}

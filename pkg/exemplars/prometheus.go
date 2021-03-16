@@ -4,14 +4,15 @@
 package exemplars
 
 import (
+	"net/url"
+
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/thanos-io/thanos/pkg/exemplars/exemplarspb"
 	"github.com/thanos-io/thanos/pkg/promclient"
 	"github.com/thanos-io/thanos/pkg/store/labelpb"
-	"net/url"
 )
 
-// Prometheus implements exemplarspb.Exemplars gRPC that allows to fetch rules from Prometheus HTTP api/v1/exemplars endpoint.
+// Prometheus implements exemplarspb.Exemplars gRPC that allows to fetch exemplars from Prometheus.
 type Prometheus struct {
 	base   *url.URL
 	client *promclient.Client
