@@ -102,7 +102,7 @@ func registerQuery(app *extkingpin.App) {
 		Hidden().PlaceHolder("<metadata>").Strings()
 
 	exemplarEndpoints := cmd.Flag("exemplar", "Experimental: Addresses of statically configured exemplars API servers (repeatable). The scheme may be prefixed with 'dns+' or 'dnssrv+' to detect exemplars API servers through respective DNS lookups.").
-	Hidden().PlaceHolder("<exemplar>").Strings()
+		Hidden().PlaceHolder("<exemplar>").Strings()
 
 	strictStores := cmd.Flag("store-strict", "Addresses of only statically configured store API servers that are always used, even if the health check fails. Useful if you have a caching layer on top.").
 		PlaceHolder("<staticstore>").Strings()
