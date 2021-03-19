@@ -4,11 +4,13 @@
 package http
 
 import (
-	"net/http"
-
+	"github.com/felixge/httpsnoop"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/weaveworks/common/middleware"
+	"net/http"
+	"strconv"
 )
 
 // InstrumentationMiddleware holds necessary metrics to instrument an http.Server
@@ -85,7 +87,7 @@ func NewInstrumentationMiddleware(reg prometheus.Registerer) InstrumentationMidd
 // value. http_requests_total is a metric vector partitioned by HTTP method
 // (label name "method") and HTTP status code (label name "code").
 func (ins *defaultInstrumentationMiddleware) NewHandler(handlerName string, handler http.Handler) http.HandlerFunc {
-	return promhttp.InstrumentHandlerDuration(
+	return ins.instrumentHandlerDuration(
 		ins.requestDuration.MustCurryWith(prometheus.Labels{"handler": handlerName}),
 		promhttp.InstrumentHandlerRequestSize(
 			ins.requestSize.MustCurryWith(prometheus.Labels{"handler": handlerName}),
@@ -98,4 +100,25 @@ func (ins *defaultInstrumentationMiddleware) NewHandler(handlerName string, hand
 			),
 		),
 	)
+}
+
+func (ins *defaultInstrumentationMiddleware) instrumentHandlerDuration(obs prometheus.ObserverVec, next http.Handler) http.HandlerFunc {
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		respMetrics := httpsnoop.CaptureMetricsFn(w, func(ww http.ResponseWriter) {
+			next.ServeHTTP(ww, r)
+		})
+
+		histogram := obs.With(prometheus.Labels{"code": strconv.Itoa(respMetrics.Code), "method": r.Method})
+		if traceID, ok := middleware.ExtractSampledTraceID(r.Context()); ok {
+			// Need to type-convert the Observer to an
+			// ExemplarObserver. This will always work for a
+			// HistogramVec.
+			histogram.(prometheus.ExemplarObserver).ObserveWithExemplar(
+				respMetrics.Duration.Seconds(), prometheus.Labels{"traceID": traceID},
+			)
+			return
+		}
+		histogram.Observe(respMetrics.Duration.Seconds())
+	})
 }
