@@ -144,7 +144,7 @@ func newChunkedIndexReader(ctx context.Context, bkt objstore.BucketReader, id ul
 	expectedBytesLen := index.HeaderLen
 	b := make([]byte, expectedBytesLen)
 	n, err := rc.Read(b)
-	if err != nil {
+	if err != nil && err != io.EOF {
 		runutil.CloseWithErrCapture(&err, rc, "close reader")
 		return nil, 0, errors.Wrapf(err, "get header from object storage of %s", indexFilepath)
 	}
@@ -192,7 +192,7 @@ func (r *chunkedIndexReader) readTOC() (*index.TOC, error) {
 	expectedBytesLen := indexTOCLen+crc32.Size
 	tocBytes := make([]byte, expectedBytesLen)
 	n, err := rc.Read(tocBytes)
-	if err != nil {
+	if err != nil && err != io.EOF  {
 		runutil.CloseWithErrCapture(&err, rc, "close toc reader")
 		return nil, errors.Wrapf(err, "get TOC from object storage of %s", r.path)
 	}
