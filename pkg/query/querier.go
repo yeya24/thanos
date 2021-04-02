@@ -5,6 +5,7 @@ package query
 
 import (
 	"context"
+	"runtime/pprof"
 	"sort"
 	"strings"
 	"time"
@@ -216,30 +217,33 @@ func (q *querier) Select(_ bool, hints *storage.SelectHints, ms ...*labels.Match
 	})
 
 	promise := make(chan storage.SeriesSet, 1)
-	go func() {
-		defer close(promise)
+	pprof.Do(ctx, pprof.Labels("query", "select"), func(ctx context.Context) {
+		go func() {
+			defer close(promise)
 
-		var err error
-		tracing.DoInSpan(ctx, "querier_select_gate_ismyturn", func(ctx context.Context) {
-			err = q.selectGate.Start(ctx)
-		})
-		if err != nil {
-			promise <- storage.ErrSeriesSet(errors.Wrap(err, "failed to wait for turn"))
-			return
-		}
-		defer q.selectGate.Done()
+			var err error
+			tracing.DoInSpan(ctx, "querier_select_gate_ismyturn", func(ctx context.Context) {
+				err = q.selectGate.Start(ctx)
+			})
+			if err != nil {
+				promise <- storage.ErrSeriesSet(errors.Wrap(err, "failed to wait for turn"))
+				return
+			}
+			defer q.selectGate.Done()
 
-		span, ctx := tracing.StartSpan(ctx, "querier_select_select_fn")
-		defer span.Finish()
+			span, ctx := tracing.StartSpan(ctx, "querier_select_select_fn")
+			defer span.Finish()
 
-		set, err := q.selectFn(ctx, hints, ms...)
-		if err != nil {
-			promise <- storage.ErrSeriesSet(err)
-			return
-		}
+			set, err := q.selectFn(ctx, hints, ms...)
+			if err != nil {
+				promise <- storage.ErrSeriesSet(err)
+				return
+			}
 
-		promise <- set
-	}()
+			promise <- set
+		}()
+	})
+
 
 	return &lazySeriesSet{create: func() (storage.SeriesSet, bool) {
 		defer cancel()

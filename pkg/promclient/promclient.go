@@ -117,6 +117,7 @@ func (c *Client) req2xx(ctx context.Context, u *url.URL, method string) (_ []byt
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
+	//req.Header.Set("cookie", "__cfduid=d3803c139d1a2178d43040aea8082f5901616769374; polarsignals=eyJhbGciOiJSUzI1NiIsImtpZCI6Ijg5ZWIwNzc2Zjk1NGM5N2QxZTIyNmEzOTE1MTgyYTI3MmJlMjI4OTcifQ.eyJpc3MiOiJodHRwczovL2lkZW50aXR5LnBvbGFyc2lnbmFscy5jb20iLCJzdWIiOiJDZ2d5TlRFMU1ERXlOQklHWjJsMGFIVmkiLCJhdWQiOiJwb2xhcnNpZ25hbHMiLCJleHAiOjE2MTcyOTI5NzIsImlhdCI6MTYxNzIwNjU3Miwibm9uY2UiOiJWQWRCSWVnVUk3Y19ZMEdGY0haWjBtajQ1TmdvM1U3c2ZCME5JMURNbW84IiwiYXRfaGFzaCI6Ik1PM0xaUWw3ZXV5eGVJYS1FM1B5QWciLCJlbWFpbCI6InliNTMyMjA0ODk3QGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiQmVuIFllIiwicHJlZmVycmVkX3VzZXJuYW1lIjoieWV5YTI0In0.rqVAwOTpe3i7G_pc8CAKlDSHTXTKjiKv0Wh9u9fk5Ip7X9Ej0pauhlAn_bRp-BOac1f9tghWmt9wKvgul_od-3xstcmooIzg5ulQiPdQEPoovFayU9cJ9nAz30gtus7LnuM2pqt1JsV1DBiChbQ30zZ8UC_0NwM83eWzAreHkc8PEi15x_Z21DNO6ErF9Zz6JUSAPqrDBBC7NI53kwY8Vnw71zqOU_7B7gThgkJj7we2h28O8F_lQYS_vAd3jDVg3S1bke0JgiV1p0DTkEUeSLYRYtxtaEF0kSoEfJYhtKkw9bWp8H-7iQwAsvoRQygnC7if86iKCZibWVzUNV-0aw")
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}

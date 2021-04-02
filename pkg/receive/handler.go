@@ -4,9 +4,11 @@
 package receive
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"io/ioutil"
 	stdlog "log"
 	"net"
@@ -280,14 +282,13 @@ func (h *Handler) receiveHTTP(w http.ResponseWriter, r *http.Request) {
 	span, ctx := tracing.StartSpan(r.Context(), "receive_http")
 	defer span.Finish()
 
-	// TODO(bwplotka): Optimize readAll https://github.com/thanos-io/thanos/pull/3334/files.
-	compressed, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	compressed := &bytes.Buffer{}
+	if r.ContentLength >= 0 {
+		compressed.Grow(int(r.ContentLength))
 	}
+	_, err := io.Copy(compressed, r.Body)
 
-	reqBuf, err := snappy.Decode(nil, compressed)
+	reqBuf, err := snappy.Decode(nil, compressed.Bytes())
 	if err != nil {
 		level.Error(h.logger).Log("msg", "snappy decode error", "err", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)

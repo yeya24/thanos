@@ -4,16 +4,18 @@
 package http
 
 import (
+	"context"
 	"fmt"
+	"github.com/opentracing/opentracing-go"
+	"github.com/uber/jaeger-client-go"
 	"net/http"
+	"runtime/pprof"
 	"strings"
 	"time"
 
-	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/uber/jaeger-client-go"
 )
 
 // InstrumentationMiddleware holds necessary metrics to instrument an http.Server
@@ -104,8 +106,28 @@ func (ins *defaultInstrumentationMiddleware) NewHandler(handlerName string, hand
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					now := time.Now()
 
+					// If we find a tracingID we'll expose it as Exemplar.
+					span := opentracing.SpanFromContext(r.Context())
+
 					wd := &responseWriterDelegator{w: w}
-					handler.ServeHTTP(wd, r)
+					lbs := pprof.Labels("handler", handlerName)
+					if span != nil {
+						spanCtx, ok := span.Context().(jaeger.SpanContext)
+						if ok {
+							lbs = pprof.Labels("handler", handlerName, "traceID", spanCtx.TraceID().String())
+							pprof.Do(r.Context(), lbs, func(ctx context.Context) {
+								handler.ServeHTTP(wd, r.WithContext(ctx))
+							})
+						} else {
+							pprof.Do(r.Context(), lbs, func(ctx context.Context) {
+								handler.ServeHTTP(wd, r.WithContext(ctx))
+							})
+						}
+					} else {
+						pprof.Do(r.Context(), lbs, func(ctx context.Context) {
+							handler.ServeHTTP(wd, r.WithContext(ctx))
+						})
+					}
 
 					observer := ins.requestDuration.WithLabelValues(
 						wd.Status(),
@@ -114,8 +136,6 @@ func (ins *defaultInstrumentationMiddleware) NewHandler(handlerName string, hand
 					)
 					observer.Observe(time.Since(now).Seconds())
 
-					// If we find a tracingID we'll expose it as Exemplar.
-					span := opentracing.SpanFromContext(r.Context())
 					if span != nil {
 						spanCtx, ok := span.Context().(jaeger.SpanContext)
 						if ok {

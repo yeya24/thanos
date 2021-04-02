@@ -6,7 +6,9 @@ package promclient
 import (
 	"context"
 	"fmt"
+	"github.com/go-kit/kit/log"
 	"io/ioutil"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -186,4 +188,15 @@ func TestQueryRange_e2e(t *testing.T) {
 
 		testutil.Equals(t, len(res) > 0, true)
 	})
+}
+
+func TestRangeQuery(t *testing.T) {
+	c := &http.Client{}
+	ua := "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36"
+	pc := NewClient(c, log.NewJSONLogger(os.Stdout), ua)
+	res, _, err := pc.QueryRange(context.Background(), &url.URL{
+		Host: "api.polarsignals.com", Path: "/api/metrics/v1/ae010c38-40ac-4dac-8df5-e46f6324bf7b", Scheme: "https",
+	}, "count(heap)", 1617163171431, 1617249571431, 720, QueryOptions{Deduplicate: true})
+	testutil.Ok(t, err)
+	println(res)
 }
