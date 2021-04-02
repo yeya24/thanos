@@ -10,7 +10,6 @@ import (
 	"hash"
 	"hash/crc32"
 	"io"
-	"io/ioutil"
 	"math"
 	"os"
 	"path/filepath"
@@ -142,12 +141,16 @@ func newChunkedIndexReader(ctx context.Context, bkt objstore.BucketReader, id ul
 		return nil, 0, errors.Wrapf(err, "get TOC from object storage of %s", indexFilepath)
 	}
 
-	b := make([]byte, 5)
-	_, err = rc.Read(b)
-	//b, err := ioutil.ReadAll(rc)
+	expectedBytesLen := index.HeaderLen
+	b := make([]byte, expectedBytesLen)
+	n, err := rc.Read(b)
 	if err != nil {
 		runutil.CloseWithErrCapture(&err, rc, "close reader")
 		return nil, 0, errors.Wrapf(err, "get header from object storage of %s", indexFilepath)
+	}
+	if n != expectedBytesLen {
+		runutil.CloseWithErrCapture(&err, rc, "close reader")
+		return nil, 0, errors.Wrapf(err, "expected read %d bytes from header, but got %d", expectedBytesLen, n)
 	}
 
 	if err := rc.Close(); err != nil {
@@ -186,10 +189,16 @@ func (r *chunkedIndexReader) readTOC() (*index.TOC, error) {
 		return nil, errors.Wrapf(err, "get TOC from object storage of %s", r.path)
 	}
 
-	tocBytes, err := ioutil.ReadAll(rc)
+	expectedBytesLen := indexTOCLen+crc32.Size
+	tocBytes := make([]byte, expectedBytesLen)
+	n, err := rc.Read(tocBytes)
 	if err != nil {
 		runutil.CloseWithErrCapture(&err, rc, "close toc reader")
 		return nil, errors.Wrapf(err, "get TOC from object storage of %s", r.path)
+	}
+	if n != expectedBytesLen {
+		runutil.CloseWithErrCapture(&err, rc, "close toc reader")
+		return nil, errors.Wrapf(err, "expected read %d bytes from toc reader, but got %d", expectedBytesLen, n)
 	}
 
 	if err := rc.Close(); err != nil {
