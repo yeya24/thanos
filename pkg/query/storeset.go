@@ -699,17 +699,20 @@ func (s *StoreSet) GetMetadataClients() []metadatapb.MetadataClient {
 }
 
 // GetExemplarsClients returns a list of all active exemplars clients.
-func (s *StoreSet) GetExemplarsClients() []exemplarspb.ExemplarsClient {
+func (s *StoreSet) GetExemplarsStores() []*exemplarspb.ExemplarStore {
 	s.storesMtx.RLock()
 	defer s.storesMtx.RUnlock()
 
-	exemplars := make([]exemplarspb.ExemplarsClient, 0, len(s.stores))
+	exemplarStores := make([]*exemplarspb.ExemplarStore, 0, len(s.stores))
 	for _, st := range s.stores {
 		if st.HasExemplarsAPI() {
-			exemplars = append(exemplars, st.exemplar)
+			exemplarStores = append(exemplarStores, &exemplarspb.ExemplarStore{
+				ExemplarsClient: st.exemplar,
+				LabelSets: st.labelSets,
+			})
 		}
 	}
-	return exemplars
+	return exemplarStores
 }
 
 func (s *StoreSet) Close() {
