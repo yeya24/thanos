@@ -99,6 +99,8 @@ type Handler struct {
 	forwardRequests   *prometheus.CounterVec
 	replications      *prometheus.CounterVec
 	replicationFactor prometheus.Gauge
+
+	bytesPool sync.Pool
 }
 
 func NewHandler(logger log.Logger, o *Options) *Handler {
@@ -181,6 +183,19 @@ func (h *Handler) Hashring(hashring Hashring) {
 	h.hashring = hashring
 	h.expBackoff.Reset()
 	h.peerStates = make(map[string]*retryState)
+}
+
+func (h *Handler) getBytesBuffer() []byte {
+	b := h.bytesPool.Get()
+	if b == nil {
+		return make([]byte, 0, 1024)
+	}
+	return b.([]byte)
+}
+
+func (h *Handler) putBytesBuffer(b []byte) {
+	//nolint:staticcheck // Ignore SA6002 safe to ignore and actually fixing it has some performance penalty.
+	h.bytesPool.Put(b[:0])
 }
 
 // Verifies whether the server is ready or not.
@@ -383,7 +398,8 @@ func (h *Handler) forward(ctx context.Context, tenant string, r replica, wreq *p
 	// at most one outgoing write request will be made
 	// to every other node in the hashring, rather than
 	// one request per time series.
-	buf := make([]byte, 0, 1024)
+	buf := h.getBytesBuffer()
+	defer func() { h.putBytesBuffer(buf) }()
 	for i := range wreq.Timeseries {
 		endpoint, err := h.hashring.GetN(tenant, &wreq.Timeseries[i], r.n, buf)
 		if err != nil {
@@ -613,7 +629,8 @@ func (h *Handler) replicate(ctx context.Context, tenant string, wreq *prompb.Wri
 		return errors.New("hashring is not ready")
 	}
 
-	buf := make([]byte, 0, 1024)
+	buf := h.getBytesBuffer()
+	defer func() { h.putBytesBuffer(buf) }()
 	for i = 0; i < h.options.ReplicationFactor; i++ {
 		endpoint, err := h.hashring.GetN(tenant, &wreq.Timeseries[0], i, buf)
 		if err != nil {
