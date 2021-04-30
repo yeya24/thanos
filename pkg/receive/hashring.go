@@ -67,8 +67,8 @@ func (s simpleHashring) GetN(tenant string, ts *prompb.TimeSeries, n uint64, buf
 	}
 
 	sort.Slice(ts.Labels, func(i, j int) bool { return ts.Labels[i].Name < ts.Labels[j].Name })
-
-	res, buf := labelpb.HashWithPrefix(tenant, ts.Labels, buf)
+	var res uint64
+	res, buf = labelpb.HashWithPrefix(tenant, ts.Labels, buf)
 	return s[(res+n)%uint64(len(s))], buf, nil
 }
 
