@@ -319,9 +319,9 @@ func DeepCopy(lbls []ZLabel) []ZLabel {
 }
 
 // HashWithPrefix returns a hash for the given prefix and labels.
-func HashWithPrefix(prefix string, lbls []ZLabel) uint64 {
+func HashWithPrefix(prefix string, lbls []ZLabel, b []byte) uint64 {
 	// Use xxhash.Sum64(b) for fast path as it's faster.
-	b := make([]byte, 0, 1024)
+	b = b[:0]
 	b = append(b, prefix...)
 	b = append(b, sep[0])
 

@@ -131,8 +131,9 @@ func TestHashringGet(t *testing.T) {
 			},
 		},
 	} {
+		buf := make([]byte, 0, 1024)
 		hs := newMultiHashring(tc.cfg)
-		h, err := hs.Get(tc.tenant, ts)
+		h, err := hs.Get(tc.tenant, ts, buf)
 		if tc.nodes != nil {
 			if err != nil {
 				t.Errorf("case %q: got unexpected error: %v", tc.name, err)
