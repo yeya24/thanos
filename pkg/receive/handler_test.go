@@ -1010,9 +1010,13 @@ func TestReceiveWithConsistencyDelay(t *testing.T) {
 // endpointHit is a helper to determine if a given endpoint in a hashring would be selected
 // for a given time series, tenant, and replication factor.
 func endpointHit(t *testing.T, h Hashring, rf uint64, endpoint, tenant string, timeSeries *prompb.TimeSeries) bool {
+	var (
+		e string
+		err error
+	)
 	buf := make([]byte, 0, 1024)
 	for i := uint64(0); i < rf; i++ {
-		e, err := h.GetN(tenant, timeSeries, i, buf)
+		e, buf, err = h.GetN(tenant, timeSeries, i, buf)
 		if err != nil {
 			t.Fatalf("got unexpected error querying hashring: %v", err)
 		}

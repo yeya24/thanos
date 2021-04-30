@@ -398,10 +398,14 @@ func (h *Handler) forward(ctx context.Context, tenant string, r replica, wreq *p
 	// at most one outgoing write request will be made
 	// to every other node in the hashring, rather than
 	// one request per time series.
+	var (
+		endpoint string
+		err error
+	)
 	buf := h.getBytesBuffer()
 	defer func() { h.putBytesBuffer(buf) }()
 	for i := range wreq.Timeseries {
-		endpoint, err := h.hashring.GetN(tenant, &wreq.Timeseries[i], r.n, buf)
+		endpoint, buf, err = h.hashring.GetN(tenant, &wreq.Timeseries[i], r.n, buf)
 		if err != nil {
 			h.mtx.RUnlock()
 			return err
@@ -629,10 +633,14 @@ func (h *Handler) replicate(ctx context.Context, tenant string, wreq *prompb.Wri
 		return errors.New("hashring is not ready")
 	}
 
+	var (
+		endpoint string
+		err error
+	)
 	buf := h.getBytesBuffer()
 	defer func() { h.putBytesBuffer(buf) }()
 	for i = 0; i < h.options.ReplicationFactor; i++ {
-		endpoint, err := h.hashring.GetN(tenant, &wreq.Timeseries[0], i, buf)
+		endpoint, buf, err = h.hashring.GetN(tenant, &wreq.Timeseries[0], i, buf)
 		if err != nil {
 			h.mtx.RUnlock()
 			return err

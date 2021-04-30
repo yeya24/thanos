@@ -319,7 +319,7 @@ func DeepCopy(lbls []ZLabel) []ZLabel {
 }
 
 // HashWithPrefix returns a hash for the given prefix and labels.
-func HashWithPrefix(prefix string, lbls []ZLabel, b []byte) uint64 {
+func HashWithPrefix(prefix string, lbls []ZLabel, b []byte) (uint64, []byte) {
 	// Use xxhash.Sum64(b) for fast path as it's faster.
 	b = b[:0]
 	b = append(b, prefix...)
@@ -336,14 +336,14 @@ func HashWithPrefix(prefix string, lbls []ZLabel, b []byte) uint64 {
 				_, _ = h.WriteString(v.Value)
 				_, _ = h.Write(sep)
 			}
-			return h.Sum64()
+			return h.Sum64(), b
 		}
 		b = append(b, v.Name...)
 		b = append(b, sep[0])
 		b = append(b, v.Value...)
 		b = append(b, sep[0])
 	}
-	return xxhash.Sum64(b)
+	return xxhash.Sum64(b), b
 }
 
 // ZLabelSets is a sortable list of ZLabelSet. It assumes the label pairs in each ZLabelSet element are already sorted.

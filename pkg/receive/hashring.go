@@ -6,12 +6,11 @@ package receive
 import (
 	"context"
 	"fmt"
+	"github.com/thanos-io/thanos/pkg/store/labelpb"
 	"sort"
 	"sync"
 
 	"github.com/pkg/errors"
-	"github.com/thanos-io/thanos/pkg/store/labelpb"
-
 	"github.com/thanos-io/thanos/pkg/store/storepb/prompb"
 )
 
@@ -32,44 +31,45 @@ func (i *insufficientNodesError) Error() string {
 // It returns the node and any error encountered.
 type Hashring interface {
 	// Get returns the first node that should handle the given tenant and time series.
-	Get(tenant string, timeSeries *prompb.TimeSeries, buf []byte) (string, error)
+	Get(tenant string, timeSeries *prompb.TimeSeries, buf []byte) (string, []byte, error)
 	// GetN returns the nth node that should handle the given tenant and time series.
-	GetN(tenant string, timeSeries *prompb.TimeSeries, n uint64, buf []byte) (string, error)
+	GetN(tenant string, timeSeries *prompb.TimeSeries, n uint64, buf []byte) (string, []byte, error)
 }
 
 // SingleNodeHashring always returns the same node.
 type SingleNodeHashring string
 
 // Get implements the Hashring interface.
-func (s SingleNodeHashring) Get(tenant string, ts *prompb.TimeSeries) (string, error) {
-	return s.GetN(tenant, ts, 0)
+func (s SingleNodeHashring) Get(tenant string, ts *prompb.TimeSeries, buf []byte) (string, []byte, error) {
+	return s.GetN(tenant, ts, 0, buf)
 }
 
 // GetN implements the Hashring interface.
-func (s SingleNodeHashring) GetN(_ string, _ *prompb.TimeSeries, n uint64) (string, error) {
+func (s SingleNodeHashring) GetN(_ string, _ *prompb.TimeSeries, n uint64, buf []byte) (string, []byte, error) {
 	if n > 0 {
-		return "", &insufficientNodesError{have: 1, want: n + 1}
+		return "", buf, &insufficientNodesError{have: 1, want: n + 1}
 	}
-	return string(s), nil
+	return string(s), buf, nil
 }
 
 // simpleHashring represents a group of nodes handling write requests.
 type simpleHashring []string
 
 // Get returns a target to handle the given tenant and time series.
-func (s simpleHashring) Get(tenant string, ts *prompb.TimeSeries, buf []byte) (string, error) {
+func (s simpleHashring) Get(tenant string, ts *prompb.TimeSeries, buf []byte) (string, []byte, error) {
 	return s.GetN(tenant, ts, 0, buf)
 }
 
 // GetN returns the nth target to handle the given tenant and time series.
-func (s simpleHashring) GetN(tenant string, ts *prompb.TimeSeries, n uint64, buf []byte) (string, error) {
+func (s simpleHashring) GetN(tenant string, ts *prompb.TimeSeries, n uint64, buf []byte) (string, []byte, error) {
 	if n >= uint64(len(s)) {
-		return "", &insufficientNodesError{have: uint64(len(s)), want: n + 1}
+		return "", buf, &insufficientNodesError{have: uint64(len(s)), want: n + 1}
 	}
 
 	sort.Slice(ts.Labels, func(i, j int) bool { return ts.Labels[i].Name < ts.Labels[j].Name })
 
-	return s[(labelpb.HashWithPrefix(tenant, ts.Labels, buf)+n)%uint64(len(s))], nil
+	res, buf := labelpb.HashWithPrefix(tenant, ts.Labels, buf)
+	return s[(res+n)%uint64(len(s))], buf, nil
 }
 
 // multiHashring represents a set of hashrings.
@@ -87,12 +87,12 @@ type multiHashring struct {
 }
 
 // Get returns a target to handle the given tenant and time series.
-func (m *multiHashring) Get(tenant string, ts *prompb.TimeSeries, buf []byte) (string, error) {
+func (m *multiHashring) Get(tenant string, ts *prompb.TimeSeries, buf []byte) (string, []byte, error) {
 	return m.GetN(tenant, ts, 0, buf)
 }
 
 // GetN returns the nth target to handle the given tenant and time series.
-func (m *multiHashring) GetN(tenant string, ts *prompb.TimeSeries, n uint64, buf []byte) (string, error) {
+func (m *multiHashring) GetN(tenant string, ts *prompb.TimeSeries, n uint64, buf []byte) (string, []byte, error) {
 	m.mu.RLock()
 	h, ok := m.cache[tenant]
 	m.mu.RUnlock()
@@ -117,7 +117,7 @@ func (m *multiHashring) GetN(tenant string, ts *prompb.TimeSeries, n uint64, buf
 			return m.hashrings[i].GetN(tenant, ts, n, buf)
 		}
 	}
-	return "", errors.New("no matching hashring to handle tenant")
+	return "", buf, errors.New("no matching hashring to handle tenant")
 }
 
 // newMultiHashring creates a multi-tenant hashring for a given slice of
