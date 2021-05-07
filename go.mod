@@ -16,7 +16,7 @@ require (
 	github.com/cortexproject/cortex v1.8.1-0.20210422151339-cf1c444e0905
 	github.com/davecgh/go-spew v1.1.1
 	github.com/facette/natsort v0.0.0-20181210072756-2cd4dd1e2dcb
-	github.com/fatih/structtag v1.1.0
+	github.com/fatih/structtag v1.2.0
 	github.com/felixge/fgprof v0.9.1
 	github.com/fsnotify/fsnotify v1.4.9
 	github.com/go-kit/kit v0.10.0
@@ -41,7 +41,7 @@ require (
 	github.com/ncw/swift v1.0.52
 	github.com/oklog/run v1.1.0
 	github.com/oklog/ulid v1.3.1
-	github.com/olekukonko/tablewriter v0.0.2
+	github.com/olekukonko/tablewriter v0.0.4
 	github.com/opentracing/basictracer-go v1.0.0
 	github.com/opentracing/opentracing-go v1.2.0
 	github.com/pkg/errors v0.9.1
@@ -51,6 +51,7 @@ require (
 	github.com/prometheus/client_model v0.2.0
 	github.com/prometheus/common v0.21.0
 	github.com/prometheus/prometheus v1.8.2-0.20210421143221-52df5ef7a3be
+	github.com/pyroscope-io/pyroscope v0.0.30 // indirect
 	github.com/uber/jaeger-client-go v2.25.0+incompatible
 	github.com/uber/jaeger-lib v2.4.0+incompatible
 	github.com/weaveworks/common v0.0.0-20210419092856-009d1eebd624

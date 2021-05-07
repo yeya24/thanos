@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/pyroscope-io/pyroscope/pkg/agent/profiler"
 	"io"
 	"os"
 	"os/signal"
@@ -26,6 +27,11 @@ import (
 	"github.com/thanos-io/thanos/pkg/tracing/client"
 	"go.uber.org/automaxprocs/maxprocs"
 	"gopkg.in/alecthomas/kingpin.v2"
+)
+
+const (
+	PYROSCOPE_APP_NAME    = "pyroscope_app_name"
+	PYROSCOPE_SERVER_ADDR = "pyroscope_server_addr"
 )
 
 func main() {
@@ -124,6 +130,11 @@ func main() {
 	}
 	// Create a signal channel to dispatch reload events to sub-commands.
 	reloadCh := make(chan struct{}, 1)
+
+	profiler.Start(profiler.Config{
+		ApplicationName: os.Getenv(PYROSCOPE_APP_NAME),
+		ServerAddress:   os.Getenv(PYROSCOPE_SERVER_ADDR),
+	})
 
 	if err := setup(&g, logger, metrics, tracer, reloadCh, *logLevel == "debug"); err != nil {
 		// Use %+v for github.com/pkg/errors error to print with stack.
