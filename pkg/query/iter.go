@@ -360,7 +360,7 @@ type dedupSeriesSet struct {
 	ok       bool
 }
 
-func NewDedupSeriesSet(set storage.SeriesSet, replicaLabels map[string]struct{}, isCounter bool) storage.SeriesSet {
+func newDedupSeriesSet(set storage.SeriesSet, replicaLabels map[string]struct{}, isCounter bool) storage.SeriesSet {
 	s := &dedupSeriesSet{set: set, replicaLabels: replicaLabels, isCounter: isCounter}
 	s.ok = s.set.Next()
 	if s.ok {

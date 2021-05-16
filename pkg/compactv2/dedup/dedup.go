@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
@@ -125,6 +126,7 @@ func RunDedup(
 	dedupDir string,
 	grouper compact.Grouper,
 	syncer *compact.Syncer,
+	noCompactMarkerFilter *compact.GatherNoCompactionMarkFilter,
 	hashFunc metadata.HashFunc,
 ) error {
 	level.Info(logger).Log("msg", "syncing metas metadata")
@@ -140,6 +142,8 @@ func RunDedup(
 		return err
 	}
 
+	planner := compact.NewPlanner(logger, []int64{int64(2 * time.Hour), int64(8 * time.Hour)}, noCompactMarkerFilter)
+
 	chunkPool := chunkenc.NewPool()
 	deduper := &deduper{
 		dedupDir:  dedupDir,
@@ -152,6 +156,13 @@ func RunDedup(
 	ctx, cancel := context.WithCancel(context.Background())
 	g.Add(func() error {
 		for _, group := range groups {
+			toCompact, err := planner.Plan(ctx, group.MetasByMeanTime())
+			if err != nil {
+				return err
+			}
+			if len(toCompact) == 0 {
+				continue
+			}
 			ids := group.IDs()
 			if len(ids) < 2 {
 				continue

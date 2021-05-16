@@ -1053,6 +1053,6 @@ func registerBucketDedup(app extkingpin.AppClause, objStoreConfig *extflag.PathO
 			metadata.HashFunc(*hashFunc),
 		)
 
-		return dedup.RunDedup(g, logger, bkt, *dedupDir, grouper, sy, metadata.HashFunc(*hashFunc))
+		return dedup.RunDedup(g, logger, bkt, *dedupDir, grouper, sy, noCompactMarkerFilter, metadata.HashFunc(*hashFunc))
 	})
 }

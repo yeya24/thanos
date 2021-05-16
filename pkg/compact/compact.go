@@ -457,6 +457,11 @@ func (cg *Group) Resolution() int64 {
 	return cg.resolution
 }
 
+// MinTime returns the min time across all group's blocks.
+func (cg *Group) MetasByMeanTime() []*metadata.Meta {
+	return cg.metasByMinTime
+}
+
 // Planner returns blocks to compact.
 type Planner interface {
 	// Plan returns a list of blocks that should be compacted into single one.
