@@ -8,6 +8,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"github.com/prometheus/prometheus/storage"
+	"github.com/thanos-io/thanos/pkg/compactv2/dedup"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -83,6 +85,7 @@ func registerBucket(app extkingpin.AppClause) {
 	registerBucketCleanup(cmd, objStoreConfig)
 	registerBucketMarkBlock(cmd, objStoreConfig)
 	registerBucketRewrite(cmd, objStoreConfig)
+	registerBucketDedup(cmd, objStoreConfig)
 }
 
 func registerBucketVerify(app extkingpin.AppClause, objStoreConfig *extflag.PathOrContent) {
@@ -916,7 +919,8 @@ func registerBucketRewrite(app extkingpin.AppClause, objStoreConfig *extflag.Pat
 				}
 
 				level.Info(logger).Log("msg", "starting rewrite for block", "source", id, "new", newID, "toDelete", string(deletionsYaml))
-				if err := comp.WriteSeries(ctx, []block.Reader{b}, d, p, compactv2.WithDeletionModifier(deletions...)); err != nil {
+				if err := comp.WriteSeries(ctx, []block.Reader{b}, d, p, storage.NewCompactingChunkSeriesMerger(storage.ChainedSeriesMerge),
+					compactv2.WithDeletionModifier(deletions...)); err != nil {
 					return errors.Wrapf(err, "writing series from %v to %v", id, newID)
 				}
 
@@ -952,5 +956,103 @@ func registerBucketRewrite(app extkingpin.AppClause, objStoreConfig *extflag.Pat
 			cancel()
 		})
 		return nil
+	})
+}
+
+func registerBucketDedup(app extkingpin.AppClause, objStoreConfig *extflag.PathOrContent) {
+	cmd := app.Command("dedup", "Rewrite chosen blocks in the bucket, while deleting or modifying series "+
+		"Resulted block has modified stats in meta.json. Additionally compaction.sources are altered to not confuse readers of meta.json. "+
+		"Instead thanos.rewrite section is added with useful info like old sources and deletion requests. "+
+		"NOTE: It's recommended to turn off compactor while doing this operation. If the compactor is running and touching exactly same block that "+
+		"is being rewritten, the resulted rewritten block might only cause overlap (mitigated by marking overlapping block manually for deletion) "+
+		"and the data you wanted to rewrite could already part of bigger block.\n\n"+
+		"Use FILESYSTEM type of bucket to rewrite block on disk (suitable for vanilla Prometheus) "+
+		"After rewrite, it's caller responsibility to delete or mark source block for deletion to avoid overlaps. "+
+		"WARNING: This procedure is *IRREVERSIBLE* after certain time (delete delay), so do backup your blocks first.")
+	dedupDir := cmd.Flag("dedup.dir", "Working directory for temporary files").Default(filepath.Join(os.TempDir(), "thanos-dedup")).String()
+	dedupReplicaLabels := cmd.Flag("deduplication.replica-label", "Label to treat as a replica indicator of blocks that can be deduplicated (repeated flag). This will merge multiple replica blocks into one. This process is irreversible."+
+		"Experimental. When it is set to true, compactor will ignore the given labels so that vertical compaction can merge the blocks."+
+		"Please note that this uses a NAIVE algorithm for merging (no smart replica deduplication, just chaining samples together)."+
+		"This works well for deduplication of blocks with **precisely the same samples** like produced by Receiver replication.").
+		Hidden().Strings()
+	deleteDelay := cmd.Flag("delete-delay", "Time before a block marked for deletion is deleted from bucket.").Default("48h").Duration()
+	consistencyDelay := cmd.Flag("consistency-delay", fmt.Sprintf("Minimum age of fresh (non-compacted) blocks before they are being processed. Malformed blocks older than the maximum of consistency-delay and %v will be removed.", compact.PartialUploadThresholdAge)).
+		Default("30m").Duration()
+	blockSyncConcurrency := cmd.Flag("block-sync-concurrency", "Number of goroutines to use when syncing block metadata from object storage.").
+		Default("20").Int()
+	acceptMalformedIndex := cmd.Flag("debug.accept-malformed-index",
+		"Compaction index verification will ignore out of order label names.").
+		Hidden().Default("false").Bool()
+	hashFunc := cmd.Flag("hash-func", "Specify which hash function to use when calculating the hashes of produced files. If no function has been specified, it does not happen. This permits avoiding downloading some files twice albeit at some performance cost. Possible values are: \"\", \"SHA256\".").
+		Default("").Enum("SHA256", "")
+	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ <-chan struct{}, _ bool) error {
+		confContentYaml, err := objStoreConfig.Content()
+		if err != nil {
+			return err
+		}
+
+		bkt, err := client.NewBucket(logger, confContentYaml, reg, component.Rewrite.String())
+		if err != nil {
+			return err
+		}
+
+		if len(*dedupReplicaLabels) == 0 {
+			return errors.New("Must specify at least replica label for deduplication")
+		}
+
+		if err := os.MkdirAll(*dedupDir, os.ModePerm); err != nil {
+			return errors.Wrap(err, "create working offline deduplication directory")
+		}
+
+		stubCounter := promauto.With(nil).NewCounter(prometheus.CounterOpts{})
+
+		// While fetching blocks, we filter out blocks that were marked for deletion by using IgnoreDeletionMarkFilter.
+		// The delay of deleteDelay/2 is added to ensure we fetch blocks that are meant to be deleted but do not have a replacement yet.
+		// This is to make sure compactor will not accidentally perform compactions with gap instead.
+		ignoreDeletionMarkFilter := block.NewIgnoreDeletionMarkFilter(logger, bkt, *deleteDelay/2, block.FetcherConcurrency)
+		duplicateBlocksFilter := block.NewDeduplicateFilter()
+		noCompactMarkerFilter := compact.NewGatherNoCompactionMarkFilter(logger, bkt, block.FetcherConcurrency)
+		consistencyDelayMetaFilter := block.NewConsistencyDelayMetaFilter(logger, *consistencyDelay, extprom.WrapRegistererWithPrefix(extpromPrefix, reg))
+
+		var sy *compact.Syncer
+		{
+			baseMetaFetcher, err := block.NewBaseFetcher(logger, block.FetcherConcurrency, bkt, "", extprom.WrapRegistererWithPrefix(extpromPrefix, reg))
+			if err != nil {
+				return errors.Wrap(err, "create meta fetcher")
+			}
+			cf := baseMetaFetcher.NewMetaFetcher(
+				extprom.WrapRegistererWithPrefix(extpromPrefix, reg), []block.MetadataFilter{
+					consistencyDelayMetaFilter,
+					ignoreDeletionMarkFilter,
+					duplicateBlocksFilter,
+					noCompactMarkerFilter,
+				}, []block.MetadataModifier{block.NewReplicaLabelRemover(logger, *dedupReplicaLabels)},
+			)
+			sy, err = compact.NewMetaSyncer(
+				logger,
+				reg,
+				bkt,
+				cf,
+				duplicateBlocksFilter,
+				ignoreDeletionMarkFilter,
+				stubCounter,
+				stubCounter,
+				*blockSyncConcurrency)
+			if err != nil {
+				return errors.Wrap(err, "create syncer")
+			}
+		}
+
+		grouper := compact.NewDefaultGrouper(logger,
+			bkt,
+			*acceptMalformedIndex,
+			true,
+			reg,
+			stubCounter,
+			stubCounter,
+			metadata.HashFunc(*hashFunc),
+		)
+
+		return dedup.RunDedup(g, logger, bkt, *dedupDir, grouper, sy, metadata.HashFunc(*hashFunc))
 	})
 }

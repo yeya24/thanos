@@ -190,7 +190,7 @@ func (s *chunkSeries) Iterator() chunkenc.Iterator {
 		default:
 			return errSeriesIterator{err: errors.Errorf("unexpected result aggregate type %v", s.aggrs)}
 		}
-		return newBoundedSeriesIterator(sit, s.mint, s.maxt)
+		return NewBoundedSeriesIterator(sit, s.mint, s.maxt)
 	}
 
 	if len(s.aggrs) != 2 {
@@ -213,7 +213,7 @@ func (s *chunkSeries) Iterator() chunkenc.Iterator {
 	default:
 		return errSeriesIterator{err: errors.Errorf("unexpected result aggregate type %v", s.aggrs)}
 	}
-	return newBoundedSeriesIterator(sit, s.mint, s.maxt)
+	return NewBoundedSeriesIterator(sit, s.mint, s.maxt)
 }
 
 func getFirstIterator(cs ...*storepb.Chunk) chunkenc.Iterator {
@@ -254,7 +254,7 @@ type boundedSeriesIterator struct {
 	mint, maxt int64
 }
 
-func newBoundedSeriesIterator(it chunkenc.Iterator, mint, maxt int64) *boundedSeriesIterator {
+func NewBoundedSeriesIterator(it chunkenc.Iterator, mint, maxt int64) *boundedSeriesIterator {
 	return &boundedSeriesIterator{it: it, mint: mint, maxt: maxt}
 }
 
@@ -360,7 +360,7 @@ type dedupSeriesSet struct {
 	ok       bool
 }
 
-func newDedupSeriesSet(set storage.SeriesSet, replicaLabels map[string]struct{}, isCounter bool) storage.SeriesSet {
+func NewDedupSeriesSet(set storage.SeriesSet, replicaLabels map[string]struct{}, isCounter bool) storage.SeriesSet {
 	s := &dedupSeriesSet{set: set, replicaLabels: replicaLabels, isCounter: isCounter}
 	s.ok = s.set.Next()
 	if s.ok {

@@ -6,6 +6,7 @@ package compactv2
 import (
 	"bytes"
 	"context"
+	"github.com/prometheus/prometheus/storage"
 	"io/ioutil"
 	"math"
 	"os"
@@ -38,6 +39,7 @@ func TestCompactor_WriteSeries_e2e(t *testing.T) {
 
 		input     [][]seriesSamples
 		modifiers []Modifier
+		mergeFunc storage.VerticalChunkSeriesMergeFunc
 		dryRun    bool
 
 		expected        []seriesSamples
@@ -397,6 +399,45 @@ func TestCompactor_WriteSeries_e2e(t *testing.T) {
 				NumChunks:  12,
 			},
 		},
+		{
+			name: "2 blocks compact with offline dedup",
+			input: [][]seriesSamples{
+				{
+					{lset: labels.Labels{{Name: "a", Value: "1"}},
+						chunks: [][]sample{{{0, 0}, {1, 1}, {2, 2}}}},
+					{lset: labels.Labels{{Name: "a", Value: "2"}},
+						chunks: [][]sample{{{0, 0}, {1, 1}, {2, 2}}}},
+					{lset: labels.Labels{{Name: "a", Value: "3"}},
+						chunks: [][]sample{{{0, 0}, {1, 1}, {2, 2}}}},
+				},
+				{
+					{lset: labels.Labels{{Name: "a", Value: "1"}},
+						chunks: [][]sample{{{10, 10}, {11, 11}, {20, 20}}}},
+					{lset: labels.Labels{{Name: "a", Value: "2"}},
+						chunks: [][]sample{{{10, 11}, {11, 11}, {20, 20}}}},
+					{lset: labels.Labels{{Name: "a", Value: "3"}},
+						chunks: [][]sample{{{10, 12}, {11, 11}, {20, 20}}}},
+					{lset: labels.Labels{{Name: "a", Value: "4"}},
+						chunks: [][]sample{{{10, 12}, {11, 11}, {20, 20}}}},
+				},
+			},
+			mergeFunc: NewDedupChunkSeriesMerger(&tsdb.TimeRange{Min: 0, Max: 30}),
+			expected: []seriesSamples{
+				{lset: labels.Labels{{Name: "a", Value: "1"}},
+					chunks: [][]sample{{{0, 0}, {1, 1}, {2, 2}}, {{10, 10}, {11, 11}, {20, 20}}}},
+				{lset: labels.Labels{{Name: "a", Value: "2"}},
+					chunks: [][]sample{{{0, 0}, {1, 1}, {2, 2}}, {{10, 11}, {11, 11}, {20, 20}}}},
+				{lset: labels.Labels{{Name: "a", Value: "3"}},
+					chunks: [][]sample{{{0, 0}, {1, 1}, {2, 2}}, {{10, 12}, {11, 11}, {20, 20}}}},
+				{lset: labels.Labels{{Name: "a", Value: "4"}},
+					chunks: [][]sample{{{10, 12}, {11, 11}, {20, 20}}}},
+			},
+			expectedStats: tsdb.BlockStats{
+				NumSamples: 21,
+				NumSeries:  4,
+				NumChunks:  7,
+			},
+		},
 	} {
 		t.Run(tcase.name, func(t *testing.T) {
 			tmpDir, err := ioutil.TempDir("", "test-series-writer")
@@ -433,13 +474,16 @@ func TestCompactor_WriteSeries_e2e(t *testing.T) {
 			d, err := block.NewDiskWriter(ctx, logger, filepath.Join(tmpDir, id.String()))
 			testutil.Ok(t, err)
 			p := NewProgressLogger(logger, series)
+			if tcase.mergeFunc == nil {
+				tcase.mergeFunc = storage.NewCompactingChunkSeriesMerger(storage.ChainedSeriesMerge)
+			}
 			if tcase.expectedErr != nil {
-				err := s.WriteSeries(ctx, blocks, d, p, tcase.modifiers...)
+				err := s.WriteSeries(ctx, blocks, d, p, tcase.mergeFunc, tcase.modifiers...)
 				testutil.NotOk(t, err)
 				testutil.Equals(t, tcase.expectedErr.Error(), err.Error())
 				return
 			}
-			testutil.Ok(t, s.WriteSeries(ctx, blocks, d, p, tcase.modifiers...))
+			testutil.Ok(t, s.WriteSeries(ctx, blocks, d, p, tcase.mergeFunc, tcase.modifiers...))
 
 			testutil.Ok(t, os.MkdirAll(filepath.Join(tmpDir, id.String()), os.ModePerm))
 			stats, err := d.Flush()

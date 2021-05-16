@@ -31,7 +31,7 @@ type progressLogger struct {
 	processed int
 }
 
-func NewProgressLogger(logger log.Logger, series int) *progressLogger {
+func NewProgressLogger(logger log.Logger, series int) ProgressLogger {
 	return &progressLogger{logger: logger, series: series}
 }
 
@@ -73,7 +73,7 @@ func NewDryRun(tmpDir string, logger log.Logger, changeLogger ChangeLogger, pool
 }
 
 // TODO(bwplotka): Upstream this.
-func (w *Compactor) WriteSeries(ctx context.Context, readers []block.Reader, sWriter block.Writer, p ProgressLogger, modifiers ...Modifier) (err error) {
+func (w *Compactor) WriteSeries(ctx context.Context, readers []block.Reader, sWriter block.Writer, p ProgressLogger, mergeFunc storage.VerticalChunkSeriesMergeFunc, modifiers ...Modifier) (err error) {
 	if len(readers) == 0 {
 		return errors.New("cannot write from no readers")
 	}
@@ -105,7 +105,7 @@ func (w *Compactor) WriteSeries(ctx context.Context, readers []block.Reader, sWr
 		sReaders = append(sReaders, seriesReader{ir: indexr, cr: chunkr})
 	}
 
-	symbols, set, err := compactSeries(ctx, sReaders...)
+	symbols, set, err := compactSeries(ctx, mergeFunc, sReaders...)
 	if err != nil {
 		return errors.Wrapf(err, "compact series from %v", func() string {
 			var metas []string
@@ -151,7 +151,7 @@ func (w *Compactor) WriteSeries(ctx context.Context, readers []block.Reader, sWr
 }
 
 // compactSeries compacts blocks' series into symbols and one ChunkSeriesSet with lazy populating chunks.
-func compactSeries(ctx context.Context, sReaders ...seriesReader) (symbols index.StringIter, set storage.ChunkSeriesSet, _ error) {
+func compactSeries(ctx context.Context, mergeFunc storage.VerticalChunkSeriesMergeFunc, sReaders ...seriesReader) (symbols index.StringIter, set storage.ChunkSeriesSet, _ error) {
 	if len(sReaders) == 0 {
 		return nil, nil, errors.New("cannot populate block from no readers")
 	}
@@ -184,5 +184,5 @@ func compactSeries(ctx context.Context, sReaders ...seriesReader) (symbols index
 		return symbols, set, nil
 	}
 	// Merge series using compacting chunk series merger.
-	return symbols, storage.NewMergeChunkSeriesSet(sets, storage.NewCompactingChunkSeriesMerger(storage.ChainedSeriesMerge)), nil
+	return symbols, storage.NewMergeChunkSeriesSet(sets, mergeFunc), nil
 }
