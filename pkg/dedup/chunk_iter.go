@@ -6,6 +6,7 @@ package dedup
 import (
 	"bytes"
 	"container/heap"
+	"fmt"
 	"math"
 
 	"github.com/prometheus/prometheus/storage"
@@ -325,6 +326,8 @@ func (a *aggrChunkIterator) Next() bool {
 		err  error
 	)
 
+	res, _ := storage.ExpandSamples(countChk.Chunk.Iterator(nil), nil)
+	fmt.Println(res)
 	chks[downsample.AggrCount] = countChk.Chunk
 	chk, err = a.toChunk(downsample.AggrSum, mint, maxt)
 	if err != nil {
@@ -399,7 +402,7 @@ func (a *aggrChunkIterator) toChunk(at downsample.AggrType, minTime, maxTime int
 		appender.Append(lastT, lastV)
 	}
 
-	// No sample in the required time range.
+	// No sample in the required time range. We don't consider t = 0 as it is only possible in tests.
 	if lastT == 0 && lastV == 0 {
 		return nil, nil
 	}
