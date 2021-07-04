@@ -5,8 +5,10 @@ package query
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-kit/kit/log"
@@ -93,6 +95,9 @@ type querier struct {
 	skipChunks          bool
 	selectGate          gate.Gate
 	selectTimeout       time.Duration
+
+	seriesCache     map[string]storage.SeriesSet
+	seriesCacheLock sync.Mutex
 }
 
 // newQuerier creates implementation of storage.Querier that fetches data from the proxy
@@ -135,6 +140,8 @@ func newQuerier(
 		maxResolutionMillis: maxResolutionMillis,
 		partialResponse:     partialResponse,
 		skipChunks:          skipChunks,
+
+		seriesCache: make(map[string]storage.SeriesSet),
 	}
 }
 
@@ -210,11 +217,22 @@ func (q *querier) Select(_ bool, hints *storage.SelectHints, ms ...*labels.Match
 	// We want to prevent this from happening for the async storea API calls we make while preserving tracing context.
 	ctx := tracing.CopyTraceContext(context.Background(), q.ctx)
 	ctx, cancel := context.WithTimeout(ctx, q.selectTimeout)
+	matcherStr := "{" + strings.Join(matchers, ",") + "}"
+	aggrs := aggrsFromFunc(hints.Func)
 	span, ctx := tracing.StartSpan(ctx, "querier_select", opentracing.Tags{
 		"minTime":  hints.Start,
 		"maxTime":  hints.End,
-		"matchers": "{" + strings.Join(matchers, ",") + "}",
+		"matchers": matcherStr,
 	})
+
+	key := fmt.Sprintf("%d:%d:%s:%s", hints.Start, hints.End, aggrs, matcherStr)
+	q.seriesCacheLock.Lock()
+	if res, ok := q.seriesCache[key]; ok {
+		q.seriesCacheLock.Unlock()
+		defer cancel()
+		defer span.Finish()
+		return res
+	}
 
 	promise := make(chan storage.SeriesSet, 1)
 	go func() {
@@ -242,7 +260,7 @@ func (q *querier) Select(_ bool, hints *storage.SelectHints, ms ...*labels.Match
 		promise <- set
 	}()
 
-	return &lazySeriesSet{create: func() (storage.SeriesSet, bool) {
+	set := &lazySeriesSet{create: func() (storage.SeriesSet, bool) {
 		defer cancel()
 		defer span.Finish()
 
@@ -253,6 +271,10 @@ func (q *querier) Select(_ bool, hints *storage.SelectHints, ms ...*labels.Match
 		}
 		return set, set.Next()
 	}}
+	q.seriesCacheLock.Lock()
+	q.seriesCache[key] = set
+	q.seriesCacheLock.Unlock()
+	return set
 }
 
 func (q *querier) selectFn(ctx context.Context, hints *storage.SelectHints, ms ...*labels.Matcher) (storage.SeriesSet, error) {
