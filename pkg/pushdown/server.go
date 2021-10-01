@@ -4,6 +4,8 @@
 package pushdown
 
 import (
+	"github.com/thanos-io/thanos/pkg/promclient"
+	"net/url"
 	"time"
 
 	"github.com/go-kit/kit/log"
@@ -27,5 +29,11 @@ func RegisterQueryServer(bs *store.BucketStore, maxSamples int, timeout time.Dur
 			BucketStore: bs,
 			Engine:      eng,
 		})
+	}
+}
+
+func RegisterPromQueryServer(c *promclient.Client, u *url.URL) func(*grpc.Server) {
+	return func(s *grpc.Server) {
+		querypb.RegisterQueryServer(s, &PromQuerier{client: c, u: u})
 	}
 }

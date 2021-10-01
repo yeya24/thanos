@@ -464,7 +464,7 @@ func (qapi *QueryAPI) queryRange(r *http.Request) (interface{}, []error, *api.Ap
 	startNS := start.UnixNano()
 	endNS := end.UnixNano()
 	if qapi.pushdownAdapter != nil {
-		if node, match := qapi.pushdownAdapter.Match(startNS, endNS); match {
+		if node, match := qapi.pushdownAdapter.Match(r.FormValue("query"), startNS, endNS); match {
 			tracing.DoInSpan(ctx, "query_gate_ismyturn", func(ctx context.Context) {
 				err = qapi.gate.Start(ctx)
 			})

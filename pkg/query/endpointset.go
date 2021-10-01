@@ -113,10 +113,11 @@ func (es *grpcEndpointSpec) fillExpectedAPIs(componentType component.Component, 
 				MinTime: mintime,
 				MaxTime: maxTime,
 			},
-			Rules:          &infopb.RulesInfo{},
-			Targets:        &infopb.TargetsInfo{},
-			MetricMetadata: &infopb.MetricMetadataInfo{},
-			Exemplars:      &infopb.ExemplarsInfo{},
+			//Rules:          &infopb.RulesInfo{},
+			//Targets:        &infopb.TargetsInfo{},
+			//MetricMetadata: &infopb.MetricMetadataInfo{},
+			//Exemplars:      &infopb.ExemplarsInfo{},
+			Query:          &infopb.QueryInfo{},
 		}
 	case component.Query:
 		{

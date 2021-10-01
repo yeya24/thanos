@@ -484,6 +484,38 @@ func (c *Client) PromqlQueryInstant(ctx context.Context, base *url.URL, query st
 }
 
 // QueryRange performs a range query using a default HTTP client and returns results in model.Matrix type.
+func (c *Client) QueryRangeWithBody(ctx context.Context, base *url.URL, query string, startTime, endTime, step int64, opts QueryOptions) ([]byte, []string, error) {
+	params, err := url.ParseQuery(base.RawQuery)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "parse raw query %s", base.RawQuery)
+	}
+	params.Add("query", query)
+	params.Add("start", formatTime(timestamp.Time(startTime)))
+	params.Add("end", formatTime(timestamp.Time(endTime)))
+	params.Add("step", strconv.FormatInt(step, 10))
+	if err := opts.AddTo(params); err != nil {
+		return nil, nil, errors.Wrap(err, "add thanos opts query params")
+	}
+
+	u := *base
+	u.Path = path.Join(u.Path, "/api/v1/query_range")
+	u.RawQuery = params.Encode()
+
+	level.Debug(c.logger).Log("msg", "range query", "url", u.String())
+
+	span, ctx := tracing.StartSpan(ctx, "/prom_query_range HTTP[client]")
+	defer span.Finish()
+
+	body, _, err := c.req2xx(ctx, &u, http.MethodGet)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "read query range response")
+	}
+
+	return body, nil, nil
+}
+
+
+// QueryRange performs a range query using a default HTTP client and returns results in model.Matrix type.
 func (c *Client) QueryRange(ctx context.Context, base *url.URL, query string, startTime, endTime, step int64, opts QueryOptions) (model.Matrix, []string, error) {
 	params, err := url.ParseQuery(base.RawQuery)
 	if err != nil {
