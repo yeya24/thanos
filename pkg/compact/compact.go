@@ -474,6 +474,70 @@ func (cg *Group) Resolution() int64 {
 	return cg.resolution
 }
 
+// should return the results/metrics of the planning simulation
+type PlanSim interface {
+	Simulate(ctx context.Context, g *DefaultGrouper, p *largeTotalIndexSizeFilter, sy *Syncer) error
+}
+
+type DefaultPlanSim struct {
+	grouper *DefaultGrouper
+	planner *largeTotalIndexSizeFilter
+	sy      *Syncer
+}
+
+func NewDefaultPlanSim(grouper *DefaultGrouper, planner *largeTotalIndexSizeFilter, sy *Syncer) *DefaultPlanSim {
+	return &DefaultPlanSim{
+		grouper: grouper,
+		planner: planner,
+		sy:      sy,
+	}
+}
+
+func (ps *DefaultPlanSim) Simulate(ctx context.Context) (int, int, error) {
+	numberOfIterations := 0
+	numberOfBlocksToMerge := 0
+
+	if err := ps.sy.SyncMetas(context.Background()); err != nil {
+		return numberOfIterations, numberOfBlocksToMerge, errors.Wrapf(err, "could not sync metas")
+	}
+	originalMetas := ps.sy.Metas()
+
+	// figure out hasPlan and noPlan
+	for {
+		groups, err := ps.grouper.Groups(originalMetas)
+		if err != nil {
+			return numberOfIterations, numberOfBlocksToMerge, errors.Wrapf(err, "could not group original metadata")
+		}
+		for _, g := range groups {
+			// parameter should be of type tsdb.BlockMeta.meta
+			plan, err := ps.planner.Plan(context.Background(), g.Metadata())
+			if err != nil {
+				return numberOfIterations, numberOfBlocksToMerge, errors.Wrapf(err, "could not plan")
+			}
+			if len(plan) == 0 {
+				continue
+			}
+			numberOfIterations++
+
+			var toRemove []ulid.ULID
+			var metas []*tsdb.BlockMeta
+			for _, p := range plan {
+				metas = append(metas, &p.BlockMeta)
+				toRemove = append(toRemove, p.BlockMeta.ULID)
+			}
+			numberOfBlocksToMerge += len(plan)
+
+			// remove 'plan' blocks from 'original metadata' - so that the remaining blocks can now be planned ?
+			// not required to modify originalMeta now
+
+			newMeta := tsdb.CompactBlockMetas(ulid.MustNew(uint64(time.Now().Unix()), nil), metas...)
+			g.AppendMeta(&metadata.Meta{BlockMeta: *newMeta})
+		}
+	}
+
+	return numberOfIterations, numberOfBlocksToMerge, nil
+}
+
 // Planner returns blocks to compact.
 type Planner interface {
 	// Plan returns a list of blocks that should be compacted into single one.
