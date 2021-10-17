@@ -540,6 +540,10 @@ func (ps *DefaultPlanSim) Simulate(ctx context.Context, originalMetas map[ulid.U
 	for len(groups) > 0 {
 		tmpGroups := make([]*Group, 0, len(groups))
 		for _, g := range groups {
+			// There is nothing to compact for group with only one block.
+			if len(g.IDs()) == 1 {
+				continue
+			}
 			// parameter should be of type tsdb.BlockMeta.meta
 			plan, err := ps.planner.Plan(ctx, g.Metadata())
 			if err != nil {
@@ -1060,6 +1064,9 @@ func (c *BucketCompactor) Compact(ctx context.Context) (rerr error) {
 			go func() {
 				defer wg.Done()
 				for g := range groupChan {
+					if len(g.IDs()) == 1 {
+						fmt.Println(len(g.IDs()))
+					}
 					shouldRerunGroup, _, err := g.Compact(workCtx, c.compactDir, c.planner, c.comp)
 					if err == nil {
 						if shouldRerunGroup {
