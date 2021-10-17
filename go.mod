@@ -8,7 +8,7 @@ require (
 	github.com/Azure/go-autorest/autorest/adal v0.9.15
 	github.com/Azure/go-autorest/autorest/azure/auth v0.5.8
 	github.com/NYTimes/gziphandler v1.1.1
-	github.com/alecthomas/units v0.0.0-20210208195552-ff826a37aa15
+	github.com/alecthomas/units v0.0.0-20210912230133-d1bdfacee922
 	github.com/aliyun/aliyun-oss-go-sdk v2.0.4+incompatible
 	github.com/baidubce/bce-sdk-go v0.9.81
 	github.com/blang/semver/v4 v4.0.0
@@ -57,9 +57,9 @@ require (
 	github.com/prometheus/alertmanager v0.23.1-0.20210914172521-e35efbddb66a
 	github.com/prometheus/client_golang v1.11.0
 	github.com/prometheus/client_model v0.2.0
-	github.com/prometheus/common v0.30.0
+	github.com/prometheus/common v0.31.1
 	github.com/prometheus/exporter-toolkit v0.6.1
-	github.com/prometheus/prometheus v1.8.2-0.20210914090109-37468d88dce8
+	github.com/prometheus/prometheus v1.8.2-0.20211014091900-fdbc40a9efcc
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.31
 	github.com/uber/jaeger-client-go v2.29.1+incompatible
 	github.com/uber/jaeger-lib v2.4.1+incompatible
@@ -93,7 +93,7 @@ replace (
 	// TODO: Remove this: https://github.com/thanos-io/thanos/issues/3967.
 	github.com/minio/minio-go/v7 => github.com/bwplotka/minio-go/v7 v7.0.11-0.20210324165441-f9927e5255a6
 	// Make sure Prometheus version is pinned as Prometheus semver does not include Go APIs.
-	github.com/prometheus/prometheus => github.com/prometheus/prometheus v1.8.2-0.20210914090109-37468d88dce8
+	github.com/prometheus/prometheus => github.com/prometheus/prometheus v1.8.2-0.20211014091900-fdbc40a9efcc
 	github.com/sercand/kuberesolver => github.com/sercand/kuberesolver v2.4.0+incompatible
 	google.golang.org/grpc => google.golang.org/grpc v1.29.1
 

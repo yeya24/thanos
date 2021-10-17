@@ -431,7 +431,7 @@ type mergeChunkSeries struct {
 func newMergeChunkSeries(lset labels.Labels) *mergeChunkSeries {
 	return &mergeChunkSeries{
 		lset:              lset,
-		OverlappingMerger: dedup.NewOverlappingMerger(newChainSampleIterator),
+		OverlappingMerger: dedup.NewOverlappingMerger(storage.NewChainSampleIterator),
 	}
 }
 
