@@ -425,6 +425,32 @@ func (cg *Group) AppendMeta(meta *metadata.Meta) error {
 	return nil
 }
 
+func (cg *Group) RemoveMetasByID(deleteMetasByMinTime []*metadata.Meta) {
+	cg.mtx.Lock()
+	defer cg.mtx.Unlock()
+
+	//i := 0
+	//m := len(cg.metasByMinTime)
+	//sort.Slice(deleteMetasByMinTime, func(i, j int) bool {
+	//	return deleteMetasByMinTime[i].MinTime < deleteMetasByMinTime[j].MinTime
+	//})
+	//j := 0
+	//n := len(deleteMetasByMinTime)
+	set := make(map[ulid.ULID]struct{})
+	for _, d := range deleteMetasByMinTime {
+		set[d.ULID] = struct{}{}
+	}
+
+	newMetas := make([]*metadata.Meta, 0)
+	for _, meta := range cg.metasByMinTime {
+		if _, exists := set[meta.ULID]; !exists {
+			newMetas = append(newMetas, meta)
+		}
+	}
+
+	cg.metasByMinTime = newMetas
+}
+
 // IDs returns all sorted IDs of blocks in the group.
 func (cg *Group) IDs() (ids []ulid.ULID) {
 	cg.mtx.Lock()
@@ -474,68 +500,79 @@ func (cg *Group) Resolution() int64 {
 	return cg.resolution
 }
 
-// should return the results/metrics of the planning simulation
 type PlanSim interface {
 	Simulate(ctx context.Context, g *DefaultGrouper, p *largeTotalIndexSizeFilter, sy *Syncer) error
 }
 
 type DefaultPlanSim struct {
-	grouper *DefaultGrouper
-	planner *largeTotalIndexSizeFilter
-	sy      *Syncer
+	grouper            Grouper
+	planner            Planner
+	logger             log.Logger
+	compactionRunsToDo prometheus.Gauge
+	blocksMergeToDo    prometheus.Gauge
 }
 
-func NewDefaultPlanSim(grouper *DefaultGrouper, planner *largeTotalIndexSizeFilter, sy *Syncer) *DefaultPlanSim {
+func NewDefaultPlanSim(grouper Grouper, planner Planner, reg prometheus.Registerer, logger log.Logger) *DefaultPlanSim {
 	return &DefaultPlanSim{
 		grouper: grouper,
 		planner: planner,
-		sy:      sy,
+		logger:  logger,
+		compactionRunsToDo: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
+			Name: "thanos_compactor_compactions_to_do",
+			Help: "thanos compactions to do",
+		}),
+		blocksMergeToDo: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
+			Name: "thanos_compactor_blocks_to_merge",
+			Help: "thanos blocks to merge",
+		}),
 	}
 }
 
-func (ps *DefaultPlanSim) Simulate(ctx context.Context) (int, int, error) {
+func (ps *DefaultPlanSim) Simulate(ctx context.Context, originalMetas map[ulid.ULID]*metadata.Meta) error {
 	numberOfIterations := 0
 	numberOfBlocksToMerge := 0
 
-	if err := ps.sy.SyncMetas(context.Background()); err != nil {
-		return numberOfIterations, numberOfBlocksToMerge, errors.Wrapf(err, "could not sync metas")
+	groups, err := ps.grouper.Groups(originalMetas)
+	if err != nil {
+		return errors.Wrapf(err, "could not group original metadata")
 	}
-	originalMetas := ps.sy.Metas()
 
-	// figure out hasPlan and noPlan
-	for {
-		groups, err := ps.grouper.Groups(originalMetas)
-		if err != nil {
-			return numberOfIterations, numberOfBlocksToMerge, errors.Wrapf(err, "could not group original metadata")
-		}
+	for len(groups) > 0 {
+		tmpGroups := make([]*Group, 0, len(groups))
 		for _, g := range groups {
 			// parameter should be of type tsdb.BlockMeta.meta
-			plan, err := ps.planner.Plan(context.Background(), g.Metadata())
+			plan, err := ps.planner.Plan(ctx, g.Metadata())
 			if err != nil {
-				return numberOfIterations, numberOfBlocksToMerge, errors.Wrapf(err, "could not plan")
+				return errors.Wrapf(err, "could not plan")
 			}
 			if len(plan) == 0 {
 				continue
 			}
 			numberOfIterations++
 
-			var toRemove []ulid.ULID
 			var metas []*tsdb.BlockMeta
 			for _, p := range plan {
 				metas = append(metas, &p.BlockMeta)
-				toRemove = append(toRemove, p.BlockMeta.ULID)
 			}
 			numberOfBlocksToMerge += len(plan)
 
-			// remove 'plan' blocks from 'original metadata' - so that the remaining blocks can now be planned ?
-			// not required to modify originalMeta now
-
 			newMeta := tsdb.CompactBlockMetas(ulid.MustNew(uint64(time.Now().Unix()), nil), metas...)
+			g.RemoveMetasByID(plan)
+			if len(g.IDs()) == 0 {
+				continue
+			}
 			g.AppendMeta(&metadata.Meta{BlockMeta: *newMeta})
+			tmpGroups = append(tmpGroups, g)
 		}
+
+		groups = tmpGroups
 	}
 
-	return numberOfIterations, numberOfBlocksToMerge, nil
+	ps.compactionRunsToDo.Set(float64(numberOfIterations))
+	ps.blocksMergeToDo.Set(float64(numberOfBlocksToMerge))
+	level.Debug(ps.logger).Log("msg", "number of iterations performed", numberOfIterations)
+	level.Debug(ps.logger).Log("msg", "number of blocks merged", numberOfBlocksToMerge)
+	return nil
 }
 
 // Planner returns blocks to compact.
