@@ -429,13 +429,6 @@ func (cg *Group) RemoveMetasByID(deleteMetasByMinTime []*metadata.Meta) {
 	cg.mtx.Lock()
 	defer cg.mtx.Unlock()
 
-	//i := 0
-	//m := len(cg.metasByMinTime)
-	//sort.Slice(deleteMetasByMinTime, func(i, j int) bool {
-	//	return deleteMetasByMinTime[i].MinTime < deleteMetasByMinTime[j].MinTime
-	//})
-	//j := 0
-	//n := len(deleteMetasByMinTime)
 	set := make(map[ulid.ULID]struct{})
 	for _, d := range deleteMetasByMinTime {
 		set[d.ULID] = struct{}{}
@@ -505,18 +498,19 @@ type PlanSim interface {
 }
 
 type DefaultPlanSim struct {
-	grouper            Grouper
-	planner            Planner
-	logger             log.Logger
+	grouper         Grouper
+	planner         Planner
+	logger          log.Logger
+	progressMetrics *ProgressMetrics
+}
+
+type ProgressMetrics struct {
 	compactionRunsToDo prometheus.Gauge
 	blocksMergeToDo    prometheus.Gauge
 }
 
-func NewDefaultPlanSim(grouper Grouper, planner Planner, reg prometheus.Registerer, logger log.Logger) *DefaultPlanSim {
-	return &DefaultPlanSim{
-		grouper: grouper,
-		planner: planner,
-		logger:  logger,
+func NewProgressMetrics(reg prometheus.Registerer) *ProgressMetrics {
+	return &ProgressMetrics{
 		compactionRunsToDo: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
 			Name: "thanos_compactor_compactions_to_do",
 			Help: "thanos compactions to do",
@@ -528,14 +522,18 @@ func NewDefaultPlanSim(grouper Grouper, planner Planner, reg prometheus.Register
 	}
 }
 
-func (ps *DefaultPlanSim) Simulate(ctx context.Context, originalMetas map[ulid.ULID]*metadata.Meta) error {
+func NewDefaultPlanSim(grouper Grouper, planner Planner, progressMetrics *ProgressMetrics, logger log.Logger) *DefaultPlanSim {
+	return &DefaultPlanSim{
+		grouper:         grouper,
+		planner:         planner,
+		logger:          logger,
+		progressMetrics: progressMetrics,
+	}
+}
+
+func (ps *DefaultPlanSim) Simulate(ctx context.Context, groups []*Group) error {
 	numberOfIterations := 0
 	numberOfBlocksToMerge := 0
-
-	groups, err := ps.grouper.Groups(originalMetas)
-	if err != nil {
-		return errors.Wrapf(err, "could not group original metadata")
-	}
 
 	for len(groups) > 0 {
 		tmpGroups := make([]*Group, 0, len(groups))
@@ -554,7 +552,7 @@ func (ps *DefaultPlanSim) Simulate(ctx context.Context, originalMetas map[ulid.U
 			}
 			numberOfIterations++
 
-			var metas []*tsdb.BlockMeta
+			metas := make([]*tsdb.BlockMeta, 0, len(plan))
 			for _, p := range plan {
 				metas = append(metas, &p.BlockMeta)
 			}
@@ -565,15 +563,18 @@ func (ps *DefaultPlanSim) Simulate(ctx context.Context, originalMetas map[ulid.U
 			if len(g.IDs()) == 0 {
 				continue
 			}
-			g.AppendMeta(&metadata.Meta{BlockMeta: *newMeta})
+			thanosMeta := metadata.Thanos{Labels: plan[0].Thanos.Labels, Downsample: plan[0].Thanos.Downsample}
+			if err := g.AppendMeta(&metadata.Meta{BlockMeta: *newMeta, Thanos: thanosMeta}); err != nil {
+				return errors.Wrapf(err, "append metadata")
+			}
 			tmpGroups = append(tmpGroups, g)
 		}
 
 		groups = tmpGroups
 	}
 
-	ps.compactionRunsToDo.Set(float64(numberOfIterations))
-	ps.blocksMergeToDo.Set(float64(numberOfBlocksToMerge))
+	ps.progressMetrics.compactionRunsToDo.Set(float64(numberOfIterations))
+	ps.progressMetrics.blocksMergeToDo.Set(float64(numberOfBlocksToMerge))
 	level.Debug(ps.logger).Log("msg", "number of iterations performed", numberOfIterations)
 	level.Debug(ps.logger).Log("msg", "number of blocks merged", numberOfBlocksToMerge)
 	return nil

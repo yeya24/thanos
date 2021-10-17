@@ -462,9 +462,13 @@ func runCompact(
 	}
 
 	g.Add(func() error {
-		ps := compact.NewDefaultPlanSim(grouper, planner, reg, logger)
-		return runutil.Repeat(time.Minute, ctx.Done(), func() error {
-			if err := ps.Simulate(ctx, sy.Metas()); err != nil {
+		ps := compact.NewDefaultPlanSim(grouper, planner, compact.NewProgressMetrics(reg), logger)
+		return runutil.Repeat(5*time.Minute, ctx.Done(), func() error {
+			groups, err := grouper.Groups(sy.Metas())
+			if err != nil {
+				return errors.Wrap(err, "group metas")
+			}
+			if err := ps.Simulate(ctx, groups); err != nil {
 				return errors.Wrapf(err, "could not simulate planning")
 			}
 

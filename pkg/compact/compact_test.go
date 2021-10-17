@@ -8,6 +8,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/prometheus/prometheus/pkg/labels"
 	"io/ioutil"
 	"path"
 	"testing"
@@ -173,4 +176,124 @@ func BenchmarkGatherNoCompactionMarkFilter_Filter(b *testing.B) {
 		}
 	}
 
+}
+
+func TestPlanSimulate(t *testing.T) {
+	logger := log.NewNopLogger()
+	blocksMarkedForDeletion := promauto.With(nil).NewCounter(prometheus.CounterOpts{})
+	garbageCollectedBlocks := promauto.With(nil).NewCounter(prometheus.CounterOpts{})
+	blockMarkedForNoCompact := promauto.With(nil).NewCounter(prometheus.CounterOpts{})
+	grouper := NewDefaultGrouper(logger, nil, false, true, nil, blocksMarkedForDeletion, garbageCollectedBlocks, blockMarkedForNoCompact, metadata.NoneFunc)
+	planner := NewTSDBBasedPlanner(logger, []int64{
+		int64(1 * time.Hour / time.Millisecond),
+		int64(2 * time.Hour / time.Millisecond),
+		int64(8 * time.Hour / time.Millisecond),
+		int64(2 * 24 * time.Hour / time.Millisecond),
+	})
+	metrics := NewProgressMetrics(prometheus.NewRegistry())
+	ps := NewDefaultPlanSim(grouper, planner, metrics, logger)
+
+	metas := []*metadata.Meta{
+		{
+			BlockMeta: tsdb.BlockMeta{
+				ULID:    ulid.MustNew(0, nil),
+				MinTime: 0,
+				MaxTime: int64(2 * time.Hour / time.Millisecond),
+			},
+			Thanos: metadata.Thanos{
+				Version: 1,
+				Labels:  map[string]string{"a": "1"},
+			},
+		},
+		{
+			BlockMeta: tsdb.BlockMeta{
+				ULID:    ulid.MustNew(1, nil),
+				MinTime: int64(2 * time.Hour / time.Millisecond),
+				MaxTime: int64(4 * time.Hour / time.Millisecond),
+			},
+			Thanos: metadata.Thanos{
+				Version: 1,
+				Labels:  map[string]string{"a": "1"},
+			},
+		},
+		{
+			BlockMeta: tsdb.BlockMeta{
+				ULID:    ulid.MustNew(2, nil),
+				MinTime: int64(4 * time.Hour / time.Millisecond),
+				MaxTime: int64(6 * time.Hour / time.Millisecond),
+			},
+			Thanos: metadata.Thanos{
+				Version: 1,
+				Labels:  map[string]string{"a": "1"},
+			},
+		},
+		{
+			BlockMeta: tsdb.BlockMeta{
+				ULID:    ulid.MustNew(3, nil),
+				MinTime: int64(6 * time.Hour / time.Millisecond),
+				MaxTime: int64(8 * time.Hour / time.Millisecond),
+			},
+			Thanos: metadata.Thanos{
+				Version: 1,
+				Labels:  map[string]string{"a": "1"},
+			},
+		},
+		{
+			BlockMeta: tsdb.BlockMeta{
+				ULID:    ulid.MustNew(4, nil),
+				MinTime: int64(8 * time.Hour / time.Millisecond),
+				MaxTime: int64(10 * time.Hour / time.Millisecond),
+			},
+			Thanos: metadata.Thanos{
+				Version: 1,
+				Labels:  map[string]string{"a": "1"},
+			},
+		},
+		{
+			BlockMeta: tsdb.BlockMeta{
+				ULID:    ulid.MustNew(5, nil),
+				MinTime: int64(10 * time.Hour / time.Millisecond),
+				MaxTime: int64(12 * time.Hour / time.Millisecond),
+			},
+			Thanos: metadata.Thanos{
+				Version: 1,
+				Labels:  map[string]string{"a": "1"},
+			},
+		},
+		{
+			BlockMeta: tsdb.BlockMeta{
+				ULID:    ulid.MustNew(6, nil),
+				MinTime: int64(12 * time.Hour / time.Millisecond),
+				MaxTime: int64(20 * time.Hour / time.Millisecond),
+			},
+			Thanos: metadata.Thanos{
+				Version: 1,
+				Labels:  map[string]string{"a": "1"},
+			},
+		},
+		{
+			BlockMeta: tsdb.BlockMeta{
+				ULID:    ulid.MustNew(7, nil),
+				MinTime: int64(20 * time.Hour / time.Millisecond),
+				MaxTime: int64(28 * time.Hour / time.Millisecond),
+			},
+			Thanos: metadata.Thanos{
+				Version: 1,
+				Labels:  map[string]string{"a": "1"},
+			},
+		},
+	}
+
+	extLabels := labels.FromMap(map[string]string{"a": "1"})
+	groups := []*Group{
+		{
+			labels:         extLabels,
+			resolution:     0,
+			metasByMinTime: metas,
+		},
+	}
+	err := ps.Simulate(context.Background(), groups)
+	testutil.Ok(t, err)
+	testutil.Equals(t, 2.0, promtestutil.ToFloat64(metrics.compactionRunsToDo))
+	testutil.Equals(t, 6.0, promtestutil.ToFloat64(metrics.blocksMergeToDo))
 }
