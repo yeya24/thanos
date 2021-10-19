@@ -505,20 +505,25 @@ type DefaultPlanSim struct {
 }
 
 type ProgressMetrics struct {
-	compactionRunsToDo prometheus.Gauge
-	blocksMergeToDo    prometheus.Gauge
+	compactionRunsToDo *prometheus.GaugeVec
+	blocksMergeToDo    *prometheus.GaugeVec
+	seriesMergeToDo    *prometheus.GaugeVec
 }
 
 func NewProgressMetrics(reg prometheus.Registerer) *ProgressMetrics {
 	return &ProgressMetrics{
-		compactionRunsToDo: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-			Name: "thanos_compactor_compactions_to_do",
+		compactionRunsToDo: promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
+			Name: "thanos_compact_todo_compaction_runs",
 			Help: "thanos compactions to do",
-		}),
-		blocksMergeToDo: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-			Name: "thanos_compactor_blocks_to_merge",
+		}, []string{"group"}),
+		blocksMergeToDo: promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
+			Name: "thanos_compact_todo_compaction_blocks",
 			Help: "thanos blocks to merge",
-		}),
+		}, []string{"group"}),
+		seriesMergeToDo: promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
+			Name: "thanos_compact_todo_compaction_series",
+			Help: "thanos series to merge",
+		}, []string{"group"}),
 	}
 }
 
@@ -532,9 +537,9 @@ func NewDefaultPlanSim(grouper Grouper, planner Planner, progressMetrics *Progre
 }
 
 func (ps *DefaultPlanSim) Simulate(ctx context.Context, groups []*Group) error {
-	numberOfIterations := 0
-	numberOfBlocksToMerge := 0
-
+	mapGroupIters := make(map[string]float64, len(groups))
+	mapGroupBlocks := make(map[string]float64, len(groups))
+	mapGroupSeries := make(map[string]float64, len(groups))
 	for len(groups) > 0 {
 		tmpGroups := make([]*Group, 0, len(groups))
 		for _, g := range groups {
@@ -550,13 +555,14 @@ func (ps *DefaultPlanSim) Simulate(ctx context.Context, groups []*Group) error {
 			if len(plan) == 0 {
 				continue
 			}
-			numberOfIterations++
+			mapGroupIters[g.key]++
+			mapGroupBlocks[g.key] += float64(len(plan))
 
 			metas := make([]*tsdb.BlockMeta, 0, len(plan))
 			for _, p := range plan {
 				metas = append(metas, &p.BlockMeta)
+				mapGroupSeries[g.key] += float64(p.Stats.NumSeries)
 			}
-			numberOfBlocksToMerge += len(plan)
 
 			newMeta := tsdb.CompactBlockMetas(ulid.MustNew(uint64(time.Now().Unix()), nil), metas...)
 			g.RemoveMetasByID(plan)
@@ -573,10 +579,11 @@ func (ps *DefaultPlanSim) Simulate(ctx context.Context, groups []*Group) error {
 		groups = tmpGroups
 	}
 
-	ps.progressMetrics.compactionRunsToDo.Set(float64(numberOfIterations))
-	ps.progressMetrics.blocksMergeToDo.Set(float64(numberOfBlocksToMerge))
-	level.Debug(ps.logger).Log("msg", "number of iterations performed", numberOfIterations)
-	level.Debug(ps.logger).Log("msg", "number of blocks merged", numberOfBlocksToMerge)
+	for group, val := range mapGroupIters {
+		ps.progressMetrics.compactionRunsToDo.WithLabelValues(group).Set(val)
+		ps.progressMetrics.blocksMergeToDo.WithLabelValues(group).Set(mapGroupBlocks[group])
+		ps.progressMetrics.seriesMergeToDo.WithLabelValues(group).Set(mapGroupSeries[group])
+	}
 	return nil
 }
 
