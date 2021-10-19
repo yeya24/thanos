@@ -356,8 +356,9 @@ func runCompact(
 		compactMetrics.blocksMarked.WithLabelValues(metadata.NoCompactMarkFilename, metadata.OutOfOrderChunksNoCompactReason),
 		metadata.HashFunc(conf.hashFunc),
 	)
+	p := compact.NewPlanner(logger, levels, noCompactMarkerFilter)
 	planner := compact.WithLargeTotalIndexSizeFilter(
-		compact.NewPlanner(logger, levels, noCompactMarkerFilter),
+		p,
 		bkt,
 		int64(conf.maxBlockIndexSize),
 		compactMetrics.blocksMarked.WithLabelValues(metadata.NoCompactMarkFilename, metadata.IndexSizeExceedingNoCompactReason),
@@ -462,8 +463,8 @@ func runCompact(
 	}
 
 	g.Add(func() error {
-		ps := compact.NewDefaultPlanSim(grouper, planner, compact.NewProgressMetrics(reg), logger)
-		return runutil.Repeat(5*time.Minute, ctx.Done(), func() error {
+		ps := compact.NewDefaultPlanSim(grouper, p, compact.NewProgressMetrics(reg), logger)
+		return runutil.Repeat(3*time.Minute, ctx.Done(), func() error {
 			groups, err := grouper.Groups(sy.Metas())
 			if err != nil {
 				return errors.Wrap(err, "group metas")
