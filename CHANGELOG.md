@@ -18,7 +18,7 @@ We use *breaking :warning:* to mark changes that are not backward compatible (re
 - [#4710](https://github.com/thanos-io/thanos/pull/4710) Store: add metric to capture timestamp of the last loaded block.
 - [#4736](https://github.com/thanos-io/thanos/pull/4736) S3: Add capability to use custom AWS STS Endpoint.
 - [#4764](https://github.com/thanos-io/thanos/pull/4764) Compactor: add `block-viewer.global.sync-block-timeout` flag to set the timeout of synchronization block metas.
-- [#4731](https://github.com/thanos-io/thanos/pull/4731) Rule: add stateless mode to ruler, based on https://github.com/thanos-io/thanos/pull/4250.
+- [#4731](https://github.com/thanos-io/thanos/pull/4731) Rule: add stateless mode to ruler according to https://thanos.io/tip/proposals-accepted/202005-scalable-rule-storage.md/. Continue https://github.com/thanos-io/thanos/pull/4250.
 
 ### Fixed
 
