@@ -6,6 +6,7 @@ package receive
 import (
 	"context"
 	"fmt"
+	"github.com/cespare/xxhash/v2"
 	"sort"
 	"sync"
 
@@ -72,6 +73,22 @@ func (s simpleHashring) GetN(tenant string, ts *prompb.TimeSeries, n uint64) (st
 	return s[(labelpb.HashWithPrefix(tenant, ts.Labels)+n)%uint64(len(s))], nil
 }
 
+type tenantOnlySimpleHashring []string
+
+// Get returns a target to handle the given tenant and time series.
+func (s tenantOnlySimpleHashring) Get(tenant string, ts *prompb.TimeSeries) (string, error) {
+	return s.GetN(tenant, ts, 0)
+}
+
+// GetN returns the nth target to handle the given tenant and time series.
+func (s tenantOnlySimpleHashring) GetN(tenant string, _ *prompb.TimeSeries, n uint64) (string, error) {
+	if n >= uint64(len(s)) {
+		return "", &insufficientNodesError{have: uint64(len(s)), want: n + 1}
+	}
+
+	return s[(xxhash.Sum64([]byte(tenant))+n)%uint64(len(s))], nil
+}
+
 // multiHashring represents a set of hashrings.
 // Which hashring to use for a tenant is determined
 // by the tenants field of the hashring configuration.
@@ -130,7 +147,13 @@ func newMultiHashring(cfg []HashringConfig) Hashring {
 	}
 
 	for _, h := range cfg {
-		m.hashrings = append(m.hashrings, simpleHashring(h.Endpoints))
+		var hashring Hashring
+		if h.TenantOnly {
+			hashring = tenantOnlySimpleHashring(h.Endpoints)
+		} else {
+			hashring = simpleHashring(h.Endpoints)
+		}
+		m.hashrings = append(m.hashrings, hashring)
 		var t map[string]struct{}
 		if len(h.Tenants) != 0 {
 			t = make(map[string]struct{})

@@ -40,9 +40,10 @@ const (
 // HashringConfig represents the configuration for a hashring
 // a receive node knows about.
 type HashringConfig struct {
-	Hashring  string   `json:"hashring,omitempty"`
-	Tenants   []string `json:"tenants,omitempty"`
-	Endpoints []string `json:"endpoints"`
+	Hashring   string   `json:"hashring,omitempty"`
+	Tenants    []string `json:"tenants,omitempty"`
+	Endpoints  []string `json:"endpoints"`
+	TenantOnly bool     `json:"tenant_only,omitempty"`
 }
 
 // ConfigWatcher is able to watch a file containing a hashring configuration
