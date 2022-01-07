@@ -695,6 +695,7 @@ func registerBucketReplicate(app extkingpin.AppClause, objStoreConfig *extflag.P
 	maxTime := model.TimeOrDuration(cmd.Flag("max-time", "End of time range limit to replicate. Thanos Replicate will replicate only metrics, which happened earlier than this value. Option can be a constant time in RFC3339 format or time duration relative to current time, such as -1d or 2h45m. Valid duration units are ms, s, m, h, d, w, y.").
 		Default("9999-12-31T23:59:59Z"))
 	ids := cmd.Flag("id", "Block to be replicated to the destination bucket. IDs will be used to match blocks and other matchers will be ignored. When specified, this command will be run only once after successful replication. Repeated field").Strings()
+	clusters := cmd.Flag("cluster", "Cluster blocks to match.").Strings()
 
 	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ <-chan struct{}, _ bool) error {
 		matchers, err := replicate.ParseFlagMatchers(tbc.matcherStrs)
@@ -702,6 +703,10 @@ func registerBucketReplicate(app extkingpin.AppClause, objStoreConfig *extflag.P
 			return errors.Wrap(err, "parse block label matchers")
 		}
 
+		if len(*clusters) > 0 {
+			clusterList := strings.Join(*clusters, "|")
+			matchers = []*labels.Matcher{labels.MustNewMatcher(labels.MatchRegexp, "cluster", clusterList)}
+		}
 		var resolutionLevels []compact.ResolutionLevel
 		for _, lvl := range tbc.resolutions {
 			resolutionLevels = append(resolutionLevels, compact.ResolutionLevel(lvl.Milliseconds()))
