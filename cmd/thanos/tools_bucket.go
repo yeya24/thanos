@@ -107,7 +107,8 @@ type bucketVerifyConfig struct {
 }
 
 type bucketLsConfig struct {
-	output string
+	output        string
+	excludeDelete bool
 }
 
 type bucketWebConfig struct {
@@ -168,6 +169,8 @@ func (tbc *bucketVerifyConfig) registerBucketVerifyFlag(cmd extkingpin.FlagClaus
 func (tbc *bucketLsConfig) registerBucketLsFlag(cmd extkingpin.FlagClause) *bucketLsConfig {
 	cmd.Flag("output", "Optional format in which to print each block's information. Options are 'json', 'wide' or a custom template.").
 		Short('o').Default("").StringVar(&tbc.output)
+	cmd.Flag("exclude-delete", "Exclude blocks marked for deletion.").
+		Default("false").BoolVar(&tbc.excludeDelete)
 	return tbc
 }
 
@@ -377,7 +380,13 @@ func registerBucketLs(app extkingpin.AppClause, objStoreConfig *extflag.PathOrCo
 			return err
 		}
 
-		fetcher, err := block.NewMetaFetcher(logger, block.FetcherConcurrency, bkt, "", extprom.WrapRegistererWithPrefix(extpromPrefix, reg), nil, nil)
+		var filters []block.MetadataFilter
+
+		if tbc.excludeDelete {
+			ignoreDeletionMarkFilter := block.NewIgnoreDeletionMarkFilter(logger, bkt, 0, block.FetcherConcurrency)
+			filters = append(filters, ignoreDeletionMarkFilter)
+		}
+		fetcher, err := block.NewMetaFetcher(logger, block.FetcherConcurrency, bkt, "", extprom.WrapRegistererWithPrefix(extpromPrefix, reg), filters, nil)
 		if err != nil {
 			return err
 		}
@@ -686,6 +695,7 @@ func registerBucketReplicate(app extkingpin.AppClause, objStoreConfig *extflag.P
 	maxTime := model.TimeOrDuration(cmd.Flag("max-time", "End of time range limit to replicate. Thanos Replicate will replicate only metrics, which happened earlier than this value. Option can be a constant time in RFC3339 format or time duration relative to current time, such as -1d or 2h45m. Valid duration units are ms, s, m, h, d, w, y.").
 		Default("9999-12-31T23:59:59Z"))
 	ids := cmd.Flag("id", "Block to be replicated to the destination bucket. IDs will be used to match blocks and other matchers will be ignored. When specified, this command will be run only once after successful replication. Repeated field").Strings()
+	clusters := cmd.Flag("cluster", "Cluster blocks to match.").Strings()
 
 	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ <-chan struct{}, _ bool) error {
 		matchers, err := replicate.ParseFlagMatchers(tbc.matcherStrs)
@@ -693,6 +703,10 @@ func registerBucketReplicate(app extkingpin.AppClause, objStoreConfig *extflag.P
 			return errors.Wrap(err, "parse block label matchers")
 		}
 
+		if len(*clusters) > 0 {
+			clusterList := strings.Join(*clusters, "|")
+			matchers = []*labels.Matcher{labels.MustNewMatcher(labels.MatchRegexp, "cluster", clusterList)}
+		}
 		var resolutionLevels []compact.ResolutionLevel
 		for _, lvl := range tbc.resolutions {
 			resolutionLevels = append(resolutionLevels, compact.ResolutionLevel(lvl.Milliseconds()))
