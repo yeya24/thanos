@@ -152,6 +152,10 @@ type bucketMarkBlockConfig struct {
 	blockIDs []string
 }
 
+type bucketDeleteConfig struct {
+	blockIDs []string
+}
+
 func (tbc *bucketVerifyConfig) registerBucketVerifyFlag(cmd extkingpin.FlagClause) *bucketVerifyConfig {
 	cmd.Flag("repair", "Attempt to repair blocks for which issues were detected").
 		Short('r').Default("false").BoolVar(&tbc.repair)
@@ -261,6 +265,13 @@ func (tbc *bucketRetentionConfig) registerBucketRetentionFlag(cmd extkingpin.Fla
 	return tbc
 }
 
+func (tbc *bucketDeleteConfig) registerBucketDeleteFlag(cmd extkingpin.FlagClause) *bucketDeleteConfig {
+	cmd.Flag("id", "ID (ULID) of the blocks for rewrite (repeated flag).").Required().StringsVar(&tbc.blockIDs)
+	cmd.Flag("tmp.dir", "Working directory for temporary files").Default(filepath.Join(os.TempDir(), "thanos-rewrite")).StringVar(&tbc.tmpDir)
+
+	return tbc
+}
+
 func registerBucket(app extkingpin.AppClause) {
 	cmd := app.Command("bucket", "Bucket utility commands")
 
@@ -275,6 +286,7 @@ func registerBucket(app extkingpin.AppClause) {
 	registerBucketMarkBlock(cmd, objStoreConfig)
 	registerBucketRewrite(cmd, objStoreConfig)
 	registerBucketRetention(cmd, objStoreConfig)
+	registerBucketDelete(cmd, objStoreConfig)
 }
 
 func registerBucketVerify(app extkingpin.AppClause, objStoreConfig *extflag.PathOrContent) {
@@ -1357,6 +1369,41 @@ func registerBucketRetention(app extkingpin.AppClause, objStoreConfig *extflag.P
 		if err := compact.ApplyRetentionPolicyByResolution(ctx, logger, bkt, sy.Metas(), retentionByResolution, stubCounter); err != nil {
 			return errors.Wrap(err, "retention failed")
 		}
+		return nil
+	})
+}
+
+func registerBucketDelete(app extkingpin.AppClause, objStoreConfig *extflag.PathOrContent) {
+	cmd := app.Command("delete", "Retention applies retention policies on the given bucket. Please make sure no compactor is running on the same bucket at the same time.")
+
+	tbc := &bucketDeleteConfig{}
+	tbc.registerBucketDeleteFlag(cmd)
+
+	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ <-chan struct{}, _ bool) error {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+		defer cancel()
+
+		confContentYaml, err := objStoreConfig.Content()
+		if err != nil {
+			return err
+		}
+		bkt, err := client.NewBucket(logger, confContentYaml, reg, component.Delete.String())
+		if err != nil {
+			return err
+		}
+		defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
+		for _, blockID := range tbc.blockIDs {
+			id, err := ulid.Parse(blockID)
+			if err != nil {
+				return errors.Errorf("block.id is not a valid UUID, got: %v", id)
+			}
+			if err := block.Delete(ctx, logger, bkt, id); err != nil {
+				return errors.Wrapf(err, "delete block %s", blockID)
+			}
+		}
+
+		// Dummy actor to immediately kill the group after the run function returns.
+		g.Add(func() error { return nil }, func(error) {})
 		return nil
 	})
 }

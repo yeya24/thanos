@@ -110,6 +110,7 @@ func FromString(storeType string) StoreAPI {
 var (
 	Bucket          = source{component: component{name: "bucket"}}
 	Cleanup         = source{component: component{name: "cleanup"}}
+	Delete          = source{component: component{name: "delete"}}
 	Mark            = source{component: component{name: "mark"}}
 	Rewrite         = source{component: component{name: "rewrite"}}
 	Compact         = source{component: component{name: "compact"}}
