@@ -309,6 +309,10 @@ func (t *MultiTSDB) startTSDB(logger log.Logger, tenantID string, tenant *tenant
 		t.mtx.Unlock()
 		return err
 	}
+	// Disable tsdb compaction explicitly.
+	if opts.MinBlockDuration == opts.MaxBlockDuration {
+		s.DisableCompactions()
+	}
 	var ship *shipper.Shipper
 	if t.bucket != nil {
 		ship = shipper.New(

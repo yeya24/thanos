@@ -381,6 +381,8 @@ func runRule(
 		if err != nil {
 			return errors.Wrap(err, "open TSDB")
 		}
+		// Disable tsdb compaction explicitly.
+		tsdbDB.DisableCompactions()
 
 		level.Debug(logger).Log("msg", "removing storage lock file if any")
 		if err := removeLockfileIfAny(logger, conf.dataDir); err != nil {
