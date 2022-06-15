@@ -1,0 +1,38 @@
+// Copyright (c) The Thanos Authors.
+// Licensed under the Apache License 2.0.
+
+syntax = "proto3";
+package thanos;
+
+option go_package = "blockspb";
+
+import "gogoproto/gogo.proto";
+import "store/storepb/types.proto";
+import "store/labelpb/types.proto";
+
+option (gogoproto.sizer_all) = true;
+option (gogoproto.marshaler_all) = true;
+option (gogoproto.unmarshaler_all) = true;
+option (gogoproto.goproto_getters_all) = false;
+
+// Do not generate XXX fields to reduce memory footprint and opening a door
+// for zero-copy casts to/from prometheus data types.
+option (gogoproto.goproto_unkeyed_all) = false;
+option (gogoproto.goproto_unrecognized_all) = false;
+option (gogoproto.goproto_sizecache_all) = false;
+
+message BlocksRequest {
+  int64 min_time = 1;
+  int64 max_time = 2;
+  repeated LabelMatcher matchers = 3 [(gogoproto.nullable) = false];
+
+  int64 max_resolution_window = 4;
+}
+
+message BlocksResponse {
+  repeated string blocks = 1;
+}
+
+service Blocks {
+  rpc Blocks(BlocksRequest) returns (BlocksResponse);
+}
