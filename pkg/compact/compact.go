@@ -1000,6 +1000,7 @@ func (cg *Group) compact(ctx context.Context, dir string, planner Planner, comp 
 	begin := time.Now()
 
 	toCompactDirs := make([]string, 0, len(toCompact))
+	tombstoneSet := make(map[ulid.ULID]struct{})
 	for _, meta := range toCompact {
 		bdir := filepath.Join(dir, meta.ULID.String())
 		for _, s := range meta.Compaction.Sources {
@@ -1046,6 +1047,9 @@ func (cg *Group) compact(ctx context.Context, dir string, planner Planner, comp 
 
 		if bb := tombstoneSyncer.getBucketBlock(meta.ULID); bb != nil {
 			ts := bb.TombstoneCache().MergeTombstones()
+			for _, t := range bb.TombstoneCache().GetTombstoneIDs() {
+				tombstoneSet[t] = struct{}{}
+			}
 			// Empty tombstone.
 			if ts.Total() == 0 {
 				continue
@@ -1090,11 +1094,19 @@ func (cg *Group) compact(ctx context.Context, dir string, planner Planner, comp 
 	bdir := filepath.Join(dir, compID.String())
 	index := filepath.Join(bdir, block.IndexFilename)
 
+	tombstonesApplied := make([]ulid.ULID, 0, len(tombstoneSet))
+	for ts := range tombstoneSet {
+		tombstonesApplied = append(tombstonesApplied, ts)
+	}
+	sort.Slice(tombstonesApplied, func(i, j int) bool {
+		return tombstonesApplied[i].Time() < tombstonesApplied[j].Time()
+	})
 	newMeta, err := metadata.InjectThanos(cg.logger, bdir, metadata.Thanos{
-		Labels:       cg.labels.Map(),
-		Downsample:   metadata.ThanosDownsample{Resolution: cg.resolution},
-		Source:       metadata.CompactorSource,
-		SegmentFiles: block.GetSegmentFiles(bdir),
+		Labels:            cg.labels.Map(),
+		Downsample:        metadata.ThanosDownsample{Resolution: cg.resolution},
+		Source:            metadata.CompactorSource,
+		SegmentFiles:      block.GetSegmentFiles(bdir),
+		TombstonesApplied: tombstonesApplied,
 	}, nil)
 	if err != nil {
 		return false, ulid.ULID{}, errors.Wrapf(err, "failed to finalize the block %s", bdir)

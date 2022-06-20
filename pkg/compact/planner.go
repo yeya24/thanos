@@ -25,6 +25,9 @@ type tsdbBasedPlanner struct {
 	ranges []int64
 
 	noCompBlocksFunc func() map[ulid.ULID]*metadata.NoCompactMark
+
+	tombstoneSyncer          *TombstoneSyncer
+	tombstoneCompactionRatio float64
 }
 
 var _ Planner = &tsdbBasedPlanner{}
@@ -39,13 +42,20 @@ func NewTSDBBasedPlanner(logger log.Logger, ranges []int64) *tsdbBasedPlanner {
 		noCompBlocksFunc: func() map[ulid.ULID]*metadata.NoCompactMark {
 			return make(map[ulid.ULID]*metadata.NoCompactMark)
 		},
+		tombstoneCompactionRatio: 0.05,
 	}
 }
 
 // NewPlanner is a default Thanos planner with the same functionality as Prometheus' TSDB plus special handling of excluded blocks.
 // It's the same functionality just without accessing filesystem, and special handling of excluded blocks.
-func NewPlanner(logger log.Logger, ranges []int64, noCompBlocks *GatherNoCompactionMarkFilter) *tsdbBasedPlanner {
-	return &tsdbBasedPlanner{logger: logger, ranges: ranges, noCompBlocksFunc: noCompBlocks.NoCompactMarkedBlocks}
+func NewPlanner(logger log.Logger, ranges []int64, noCompBlocks *GatherNoCompactionMarkFilter, tombstoneSyncer *TombstoneSyncer, tombstoneCompactionRatio float64) *tsdbBasedPlanner {
+	return &tsdbBasedPlanner{
+		logger:                   logger,
+		ranges:                   ranges,
+		noCompBlocksFunc:         noCompBlocks.NoCompactMarkedBlocks,
+		tombstoneSyncer:          tombstoneSyncer,
+		tombstoneCompactionRatio: tombstoneCompactionRatio,
+	}
 }
 
 // TODO(bwplotka): Consider smarter algorithm, this prefers smaller iterative compactions vs big single one: https://github.com/thanos-io/thanos/issues/3405
@@ -79,14 +89,22 @@ func (p *tsdbBasedPlanner) plan(noCompactMarked map[ulid.ULID]*metadata.NoCompac
 		return res, nil
 	}
 
-	// Compact any blocks with big enough time range that have >5% tombstones.
+	// Compact any blocks with big enough time range that have tombstones > tombstone compaction ratio.
 	for i := len(notExcludedMetasByMinTime) - 1; i >= 0; i-- {
 		meta := notExcludedMetasByMinTime[i]
 		if meta.MaxTime-meta.MinTime < p.ranges[len(p.ranges)/2] {
 			break
 		}
-		if float64(meta.Stats.NumTombstones)/float64(meta.Stats.NumSeries+1) > 0.05 {
+		if float64(meta.Stats.NumTombstones)/float64(meta.Stats.NumSeries+1) > p.tombstoneCompactionRatio {
 			return []*metadata.Meta{notExcludedMetasByMinTime[i]}, nil
+		}
+
+		if p.tombstoneSyncer != nil {
+			if bb, ok := p.tombstoneSyncer.bucketBlocks[meta.ULID]; ok {
+				if float64(bb.TombstoneCache().MergeTombstones().Total())/float64(meta.Stats.NumSeries+1) > p.tombstoneCompactionRatio {
+					return []*metadata.Meta{notExcludedMetasByMinTime[i]}, nil
+				}
+			}
 		}
 	}
 

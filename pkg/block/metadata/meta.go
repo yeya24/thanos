@@ -88,6 +88,19 @@ type Thanos struct {
 
 	// Rewrites is present when any rewrite (deletion, relabel etc) were applied to this block. Optional.
 	Rewrites []Rewrite `json:"rewrites,omitempty"`
+
+	// TombstonesApplied represents the tombstones applied when compacting this block. Optional.
+	TombstonesApplied []ulid.ULID `json:"tombstones_applied,omitempty"`
+}
+
+// ContainsTombstone checks whether the metadata has the tombstone applied or not.
+func (m *Meta) ContainsTombstone(ulid ulid.ULID) bool {
+	for _, t := range m.Thanos.TombstonesApplied {
+		if t == ulid {
+			return true
+		}
+	}
+	return false
 }
 
 type Rewrite struct {

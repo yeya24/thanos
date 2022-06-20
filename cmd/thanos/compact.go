@@ -357,7 +357,11 @@ func runCompact(
 		compactMetrics.blocksMarked.WithLabelValues(metadata.NoCompactMarkFilename, metadata.OutOfOrderChunksNoCompactReason),
 		metadata.HashFunc(conf.hashFunc),
 	)
-	tsdbPlanner := compact.NewPlanner(logger, levels, noCompactMarkerFilter)
+	tombstoneSyncer, err := compact.NewTombstoneSyncer(bkt, logger, conf.dataDir, sy, tombstoneFetcher, reg)
+	if err != nil {
+		return err
+	}
+	tsdbPlanner := compact.NewPlanner(logger, levels, noCompactMarkerFilter, tombstoneSyncer, 0.05)
 	planner := compact.WithLargeTotalIndexSizeFilter(
 		tsdbPlanner,
 		bkt,
@@ -365,10 +369,6 @@ func runCompact(
 		compactMetrics.blocksMarked.WithLabelValues(metadata.NoCompactMarkFilename, metadata.IndexSizeExceedingNoCompactReason),
 	)
 	blocksCleaner := compact.NewBlocksCleaner(logger, bkt, ignoreDeletionMarkFilter, deleteDelay, compactMetrics.blocksCleaned, compactMetrics.blockCleanupFailures)
-	tombstoneSyncer, err := compact.NewTombstoneSyncer(bkt, logger, conf.dataDir, sy, tombstoneFetcher, reg)
-	if err != nil {
-		return err
-	}
 	compactor, err := compact.NewBucketCompactor(
 		logger,
 		sy,

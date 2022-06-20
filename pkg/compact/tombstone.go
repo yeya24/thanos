@@ -75,6 +75,9 @@ func (t *TombstoneSyncer) SyncTombstones(ctx context.Context) error {
 		meta := meta
 		dir := filepath.Join(t.dataDir, meta.ULID.String())
 		for _, tb := range tombstones {
+			if meta.ContainsTombstone(tb.ULID) {
+				continue
+			}
 			matchers, ok := tb.MatchMeta(meta)
 			if !ok {
 				continue
@@ -139,17 +142,16 @@ func (t *TombstoneSyncer) GarbageCollect(ctx context.Context) error {
 OUTER:
 	for _, tb := range tombstones {
 		for _, meta := range metas {
+			if meta.ContainsTombstone(tb.ULID) {
+				continue
+			}
+
 			if _, ok := tb.MatchMeta(meta); !ok {
 				continue
 			}
 
 			b, ok := t.bucketBlocks[meta.ULID]
 			if !ok {
-				// Maybe the block is the newly compacted block.
-				// We continue next round.
-				// TODO: we can also check the compaction sources to see if
-				// the source blocks are compacted by tombstones. We can also cleanup
-				// the cache after compaction is done.
 				continue OUTER
 			}
 
@@ -160,11 +162,11 @@ OUTER:
 				}
 			}
 		}
-		// The tombstone deletion is done, Remove tombstone from cache.
+		// The tombstone deletion is done, remove tombstone from cache.
 		for _, block := range t.bucketBlocks {
 			block.TombstoneCache().Delete(tb.ULID)
 		}
-		// Remove the tombstone from the object storage.
+		// Remove the tombstone file from the object storage.
 		if err := tombstone.RemoveTombstone(ctx, tb.ULID, t.bkt); err != nil {
 			return err
 		}

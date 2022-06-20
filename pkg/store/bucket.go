@@ -1493,9 +1493,14 @@ func (s *BucketStore) SyncTombstones(ctx context.Context) error {
 			}
 		}
 		for _, t := range tombstones {
-			t := t
+			if block.meta.ContainsTombstone(t.ULID) {
+				continue
+			}
 			matchers, ok := t.MatchMeta(block.meta)
 			if !ok {
+				continue
+			}
+			if _, ok := block.TombstoneCache().Get(t.ULID); ok {
 				continue
 			}
 			// Process tombstones for each block in the best effort manner.
