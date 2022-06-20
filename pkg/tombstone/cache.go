@@ -70,3 +70,23 @@ func (m *MemTombstonesCache) GetIntervalsByRef(ref storage.SeriesRef) tombstones
 	}
 	return intervals
 }
+
+func (m *MemTombstonesCache) MergeTombstones() *tombstones.MemTombstones {
+	stones := tombstones.NewMemTombstones()
+	m.mtx.RLock()
+	defer m.mtx.RUnlock()
+	if len(m.tombstones) == 1 {
+		for _, t := range m.tombstones {
+			return t
+		}
+	}
+	for _, ts := range m.tombstones {
+		ts.Iter(func(id storage.SeriesRef, ivs tombstones.Intervals) error {
+			for _, iv := range ivs {
+				stones.AddInterval(id, iv)
+			}
+			return nil
+		})
+	}
+	return stones
+}

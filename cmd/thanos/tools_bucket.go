@@ -839,8 +839,7 @@ func registerBucketCleanup(app extkingpin.AppClause, objStoreConfig *extflag.Pat
 				duplicateBlocksFilter,
 				ignoreDeletionMarkFilter,
 				stubCounter,
-				stubCounter,
-				tbc.blockSyncConcurrency)
+				stubCounter)
 			if err != nil {
 				return errors.Wrap(err, "create syncer")
 			}

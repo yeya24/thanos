@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/tsdb"
+	promtombstones "github.com/prometheus/prometheus/tsdb/tombstones"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/thanos-io/thanos/pkg/block"
@@ -98,7 +99,7 @@ func newSyncerMetrics(reg prometheus.Registerer, blocksMarkedForDeletion, garbag
 
 // NewMetaSyncer returns a new Syncer for the given Bucket and directory.
 // Blocks must be at least as old as the sync delay for being considered.
-func NewMetaSyncer(logger log.Logger, reg prometheus.Registerer, bkt objstore.Bucket, fetcher block.MetadataFetcher, duplicateBlocksFilter *block.DeduplicateFilter, ignoreDeletionMarkFilter *block.IgnoreDeletionMarkFilter, blocksMarkedForDeletion, garbageCollectedBlocks prometheus.Counter, blockSyncConcurrency int) (*Syncer, error) {
+func NewMetaSyncer(logger log.Logger, reg prometheus.Registerer, bkt objstore.Bucket, fetcher block.MetadataFetcher, duplicateBlocksFilter *block.DeduplicateFilter, ignoreDeletionMarkFilter *block.IgnoreDeletionMarkFilter, blocksMarkedForDeletion, garbageCollectedBlocks prometheus.Counter) (*Syncer, error) {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
@@ -111,7 +112,6 @@ func NewMetaSyncer(logger log.Logger, reg prometheus.Registerer, bkt objstore.Bu
 		metrics:                  newSyncerMetrics(reg, blocksMarkedForDeletion, garbageCollectedBlocks),
 		duplicateBlocksFilter:    duplicateBlocksFilter,
 		ignoreDeletionMarkFilter: ignoreDeletionMarkFilter,
-		blockSyncConcurrency:     blockSyncConcurrency,
 	}, nil
 }
 
@@ -333,6 +333,7 @@ type Group struct {
 	resolution                  int64
 	mtx                         sync.Mutex
 	metasByMinTime              []*metadata.Meta
+	tombstoneSyncer             *TombstoneSyncer
 	acceptMalformedIndex        bool
 	enableVerticalCompaction    bool
 	compactions                 prometheus.Counter
@@ -736,7 +737,7 @@ type Compactor interface {
 
 // Compact plans and runs a single compaction against the group. The compacted result
 // is uploaded into the bucket the blocks were retrieved from.
-func (cg *Group) Compact(ctx context.Context, dir string, planner Planner, comp Compactor) (shouldRerun bool, compID ulid.ULID, rerr error) {
+func (cg *Group) Compact(ctx context.Context, dir string, planner Planner, comp Compactor, tombstoneSyncer *TombstoneSyncer) (shouldRerun bool, compID ulid.ULID, rerr error) {
 	cg.compactionRunsStarted.Inc()
 
 	subDir := filepath.Join(dir, cg.Key())
@@ -758,7 +759,7 @@ func (cg *Group) Compact(ctx context.Context, dir string, planner Planner, comp 
 
 	var err error
 	tracing.DoInSpanWithErr(ctx, "compaction_group", func(ctx context.Context) error {
-		shouldRerun, compID, err = cg.compact(ctx, subDir, planner, comp)
+		shouldRerun, compID, err = cg.compact(ctx, subDir, planner, comp, tombstoneSyncer)
 		return err
 	}, opentracing.Tags{"group.key": cg.Key()})
 	if err != nil {
@@ -960,7 +961,7 @@ func RepairIssue347(ctx context.Context, logger log.Logger, bkt objstore.Bucket,
 	return nil
 }
 
-func (cg *Group) compact(ctx context.Context, dir string, planner Planner, comp Compactor) (shouldRerun bool, compID ulid.ULID, err error) {
+func (cg *Group) compact(ctx context.Context, dir string, planner Planner, comp Compactor, tombstoneSyncer *TombstoneSyncer) (shouldRerun bool, compID ulid.ULID, err error) {
 	cg.mtx.Lock()
 	defer cg.mtx.Unlock()
 
@@ -1042,6 +1043,14 @@ func (cg *Group) compact(ctx context.Context, dir string, planner Planner, comp 
 			return false, ulid.ULID{}, errors.Wrapf(err,
 				"block id %s, try running with --debug.accept-malformed-index", meta.ULID)
 		}
+
+		if bb := tombstoneSyncer.getBucketBlock(meta.ULID); bb != nil {
+			ts := bb.TombstoneCache().MergeTombstones()
+			if _, err := promtombstones.WriteFile(cg.logger, bdir, ts); err != nil {
+				return true, ulid.ULID{}, errors.Wrapf(err, "block id %s, failed to write tombstone file", meta.ULID)
+			}
+		}
+
 		toCompactDirs = append(toCompactDirs, bdir)
 	}
 	level.Info(cg.logger).Log("msg", "downloaded and verified blocks; compacting blocks", "plan", fmt.Sprintf("%v", toCompactDirs), "duration", time.Since(begin), "duration_ms", time.Since(begin).Milliseconds())
@@ -1161,6 +1170,7 @@ type BucketCompactor struct {
 	bkt                            objstore.Bucket
 	concurrency                    int
 	skipBlocksWithOutOfOrderChunks bool
+	tombstoneSyncer                *TombstoneSyncer
 }
 
 // NewBucketCompactor creates a new bucket compactor.
@@ -1172,6 +1182,7 @@ func NewBucketCompactor(
 	comp Compactor,
 	compactDir string,
 	bkt objstore.Bucket,
+	tombstoneSyncer *TombstoneSyncer,
 	concurrency int,
 	skipBlocksWithOutOfOrderChunks bool,
 ) (*BucketCompactor, error) {
@@ -1188,6 +1199,7 @@ func NewBucketCompactor(
 		bkt:                            bkt,
 		concurrency:                    concurrency,
 		skipBlocksWithOutOfOrderChunks: skipBlocksWithOutOfOrderChunks,
+		tombstoneSyncer:                tombstoneSyncer,
 	}, nil
 }
 
@@ -1224,7 +1236,7 @@ func (c *BucketCompactor) Compact(ctx context.Context) (rerr error) {
 			go func() {
 				defer wg.Done()
 				for g := range groupChan {
-					shouldRerunGroup, _, err := g.Compact(workCtx, c.compactDir, c.planner, c.comp)
+					shouldRerunGroup, _, err := g.Compact(workCtx, c.compactDir, c.planner, c.comp, c.tombstoneSyncer)
 					if err == nil {
 						if shouldRerunGroup {
 							mtx.Lock()

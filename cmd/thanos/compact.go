@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/thanos-io/thanos/pkg/tombstone"
 	"os"
 	"path"
 	"strconv"
@@ -238,6 +239,12 @@ func runCompact(
 	if err != nil {
 		return errors.Wrap(err, "create meta fetcher")
 	}
+	tombstoneFetcher, err := tombstone.NewFetcher(logger, conf.blockMetaFetchConcurrency, bkt, "", extprom.WrapRegistererWithPrefix("thanos_", reg), []tombstone.Filter{
+		tombstone.NewDelayTombstoneFilter(logger, time.Duration(conf.tombstoneDeleteDelay)),
+	})
+	if err != nil {
+		return errors.Wrap(err, "create tombstone fetcher")
+	}
 
 	enableVerticalCompaction := conf.enableVerticalCompaction
 	if len(conf.dedupReplicaLabels) > 0 {
@@ -280,7 +287,7 @@ func runCompact(
 			ignoreDeletionMarkFilter,
 			compactMetrics.blocksMarked.WithLabelValues(metadata.DeletionMarkFilename, ""),
 			compactMetrics.garbageCollectedBlocks,
-			conf.blockSyncConcurrency)
+		)
 		if err != nil {
 			return errors.Wrap(err, "create syncer")
 		}
@@ -358,6 +365,10 @@ func runCompact(
 		compactMetrics.blocksMarked.WithLabelValues(metadata.NoCompactMarkFilename, metadata.IndexSizeExceedingNoCompactReason),
 	)
 	blocksCleaner := compact.NewBlocksCleaner(logger, bkt, ignoreDeletionMarkFilter, deleteDelay, compactMetrics.blocksCleaned, compactMetrics.blockCleanupFailures)
+	tombstoneSyncer, err := compact.NewTombstoneSyncer(logger, conf.dataDir, sy, tombstoneFetcher, reg)
+	if err != nil {
+		return err
+	}
 	compactor, err := compact.NewBucketCompactor(
 		logger,
 		sy,
@@ -366,6 +377,7 @@ func runCompact(
 		comp,
 		compactDir,
 		bkt,
+		tombstoneSyncer,
 		conf.compactionConcurrency,
 		conf.skipBlockWithOutOfOrderChunks,
 	)
@@ -418,6 +430,10 @@ func runCompact(
 	}
 
 	compactMainFn := func() error {
+		if err := tombstoneSyncer.SyncTombstones(ctx); err != nil {
+			return errors.Wrap(err, "sync tombstones")
+		}
+
 		if err := compactor.Compact(ctx); err != nil {
 			return errors.Wrap(err, "compaction")
 		}
@@ -629,25 +645,27 @@ type compactConfig struct {
 	wait                                           bool
 	waitInterval                                   time.Duration
 	disableDownsampling                            bool
-	blockSyncConcurrency                           int
 	blockMetaFetchConcurrency                      int
-	blockViewerSyncBlockInterval                   time.Duration
-	blockViewerSyncBlockTimeout                    time.Duration
-	cleanupBlocksInterval                          time.Duration
-	compactionConcurrency                          int
-	downsampleConcurrency                          int
-	deleteDelay                                    model.Duration
-	dedupReplicaLabels                             []string
-	selectorRelabelConf                            extflag.PathOrContent
-	webConf                                        webConfig
-	label                                          string
-	maxBlockIndexSize                              units.Base2Bytes
-	hashFunc                                       string
-	enableVerticalCompaction                       bool
-	dedupFunc                                      string
-	skipBlockWithOutOfOrderChunks                  bool
-	progressCalculateInterval                      time.Duration
-	filterConf                                     *store.FilterConfig
+	tombstoneSyncConcurrency                       int
+
+	blockViewerSyncBlockInterval  time.Duration
+	blockViewerSyncBlockTimeout   time.Duration
+	cleanupBlocksInterval         time.Duration
+	compactionConcurrency         int
+	downsampleConcurrency         int
+	deleteDelay                   model.Duration
+	tombstoneDeleteDelay          model.Duration
+	dedupReplicaLabels            []string
+	selectorRelabelConf           extflag.PathOrContent
+	webConf                       webConfig
+	label                         string
+	maxBlockIndexSize             units.Base2Bytes
+	hashFunc                      string
+	enableVerticalCompaction      bool
+	dedupFunc                     string
+	skipBlockWithOutOfOrderChunks bool
+	progressCalculateInterval     time.Duration
+	filterConf                    *store.FilterConfig
 }
 
 func (cc *compactConfig) registerFlag(cmd extkingpin.FlagClause) {
@@ -687,8 +705,8 @@ func (cc *compactConfig) registerFlag(cmd extkingpin.FlagClause) {
 		"as querying long time ranges without non-downsampled data is not efficient and useful e.g it is not possible to render all samples for a human eye anyway").
 		Default("false").BoolVar(&cc.disableDownsampling)
 
-	cmd.Flag("block-sync-concurrency", "Number of goroutines to use when syncing block metadata from object storage.").
-		Default("20").IntVar(&cc.blockSyncConcurrency)
+	cmd.Flag("tombstone-sync-concurrency", "Number of goroutines to use when syncing block metadata from object storage.").
+		Default("20").IntVar(&cc.tombstoneSyncConcurrency)
 	cmd.Flag("block-meta-fetch-concurrency", "Number of goroutines to use when fetching block metadata from object storage.").
 		Default("32").IntVar(&cc.blockMetaFetchConcurrency)
 	cmd.Flag("block-viewer.global.sync-block-interval", "Repeat interval for syncing the blocks between local and remote view for /global Block Viewer UI.").
@@ -711,6 +729,13 @@ func (cc *compactConfig) registerFlag(cmd extkingpin.FlagClause) {
 		"Note that deleting blocks immediately can cause query failures, if store gateway still has the block loaded, "+
 		"or compactor is ignoring the deletion because it's compacting the block at the same time.").
 		Default("48h").SetValue(&cc.deleteDelay)
+
+	cmd.Flag("tombstone-delete-delay", "Time before a block marked for deletion is deleted from bucket. "+
+		"If delete-delay is non zero, blocks will be marked for deletion and compactor component will delete blocks marked for deletion from the bucket. "+
+		"If delete-delay is 0, blocks will be deleted straight away. "+
+		"Note that deleting blocks immediately can cause query failures, if store gateway still has the block loaded, "+
+		"or compactor is ignoring the deletion because it's compacting the block at the same time.").
+		Default("24h").SetValue(&cc.tombstoneDeleteDelay)
 
 	cmd.Flag("compact.enable-vertical-compaction", "Experimental. When set to true, compactor will allow overlaps and perform **irreversible** vertical compaction. See https://thanos.io/tip/components/compact.md/#vertical-compactions to read more. "+
 		"Please note that by default this uses a NAIVE algorithm for merging. If you need a different deduplication algorithm (e.g one that works well with Prometheus replicas), please set it via --deduplication.func."+

@@ -104,7 +104,7 @@ var (
 	errBlockSyncConcurrencyNotValid = errors.New("the block sync concurrency must be equal or greater than 1.")
 )
 
-type bucketStoreMetrics struct {
+type BucketStoreMetrics struct {
 	blocksLoaded          prometheus.Gauge
 	blockLoads            prometheus.Counter
 	blockLoadFailures     prometheus.Counter
@@ -133,73 +133,73 @@ type bucketStoreMetrics struct {
 	postingsFetchDuration prometheus.Histogram
 }
 
-func newBucketStoreMetrics(reg prometheus.Registerer) *bucketStoreMetrics {
-	var m bucketStoreMetrics
+func NewBucketStoreMetrics(reg prometheus.Registerer) *BucketStoreMetrics {
+	var m BucketStoreMetrics
 
 	m.blockLoads = promauto.With(reg).NewCounter(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_block_loads_total",
+		Name: "block_loads_total",
 		Help: "Total number of remote block loading attempts.",
 	})
 	m.blockLoadFailures = promauto.With(reg).NewCounter(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_block_load_failures_total",
+		Name: "block_load_failures_total",
 		Help: "Total number of failed remote block loading attempts.",
 	})
 	m.blockDrops = promauto.With(reg).NewCounter(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_block_drops_total",
+		Name: "block_drops_total",
 		Help: "Total number of local blocks that were dropped.",
 	})
 	m.blockDropFailures = promauto.With(reg).NewCounter(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_block_drop_failures_total",
+		Name: "block_drop_failures_total",
 		Help: "Total number of local blocks that failed to be dropped.",
 	})
 	m.blocksLoaded = promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-		Name: "thanos_bucket_store_blocks_loaded",
+		Name: "blocks_loaded",
 		Help: "Number of currently loaded blocks.",
 	})
 	m.lastLoadedBlock = promauto.With(reg).NewGauge(prometheus.GaugeOpts{
-		Name: "thanos_bucket_store_blocks_last_loaded_timestamp_seconds",
+		Name: "blocks_last_loaded_timestamp_seconds",
 		Help: "Timestamp when last block got loaded.",
 	})
 
 	m.seriesDataTouched = promauto.With(reg).NewSummaryVec(prometheus.SummaryOpts{
-		Name: "thanos_bucket_store_series_data_touched",
+		Name: "series_data_touched",
 		Help: "How many items of a data type in a block were touched for a single series request.",
 	}, []string{"data_type"})
 	m.seriesDataFetched = promauto.With(reg).NewSummaryVec(prometheus.SummaryOpts{
-		Name: "thanos_bucket_store_series_data_fetched",
+		Name: "series_data_fetched",
 		Help: "How many items of a data type in a block were fetched for a single series request.",
 	}, []string{"data_type"})
 
 	m.seriesDataSizeTouched = promauto.With(reg).NewSummaryVec(prometheus.SummaryOpts{
-		Name: "thanos_bucket_store_series_data_size_touched_bytes",
+		Name: "series_data_size_touched_bytes",
 		Help: "Size of all items of a data type in a block were touched for a single series request.",
 	}, []string{"data_type"})
 	m.seriesDataSizeFetched = promauto.With(reg).NewSummaryVec(prometheus.SummaryOpts{
-		Name: "thanos_bucket_store_series_data_size_fetched_bytes",
+		Name: "series_data_size_fetched_bytes",
 		Help: "Size of all items of a data type in a block were fetched for a single series request.",
 	}, []string{"data_type"})
 
 	m.seriesBlocksQueried = promauto.With(reg).NewSummary(prometheus.SummaryOpts{
-		Name: "thanos_bucket_store_series_blocks_queried",
+		Name: "series_blocks_queried",
 		Help: "Number of blocks in a bucket store that were touched to satisfy a query.",
 	})
 	m.seriesGetAllDuration = promauto.With(reg).NewHistogram(prometheus.HistogramOpts{
-		Name:    "thanos_bucket_store_series_get_all_duration_seconds",
+		Name:    "series_get_all_duration_seconds",
 		Help:    "Time it takes until all per-block prepares and loads for a query are finished.",
 		Buckets: []float64{0.001, 0.01, 0.1, 0.3, 0.6, 1, 3, 6, 9, 20, 30, 60, 90, 120},
 	})
 	m.seriesMergeDuration = promauto.With(reg).NewHistogram(prometheus.HistogramOpts{
-		Name:    "thanos_bucket_store_series_merge_duration_seconds",
+		Name:    "series_merge_duration_seconds",
 		Help:    "Time it takes to merge sub-results from all queried blocks into a single result.",
 		Buckets: []float64{0.001, 0.01, 0.1, 0.3, 0.6, 1, 3, 6, 9, 20, 30, 60, 90, 120},
 	})
 	m.resultSeriesCount = promauto.With(reg).NewSummary(prometheus.SummaryOpts{
-		Name: "thanos_bucket_store_series_result_series",
+		Name: "series_result_series",
 		Help: "Number of series observed in the final result of a query.",
 	})
 
 	m.chunkSizeBytes = promauto.With(reg).NewHistogram(prometheus.HistogramOpts{
-		Name: "thanos_bucket_store_sent_chunk_size_bytes",
+		Name: "sent_chunk_size_bytes",
 		Help: "Size in bytes of the chunks for the single series, which is adequate to the gRPC message size sent to querier.",
 		Buckets: []float64{
 			32, 256, 512, 1024, 32 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024, 32 * 1024 * 1024, 256 * 1024 * 1024, 512 * 1024 * 1024,
@@ -207,52 +207,52 @@ func newBucketStoreMetrics(reg prometheus.Registerer) *bucketStoreMetrics {
 	})
 
 	m.queriesDropped = promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_queries_dropped_total",
+		Name: "queries_dropped_total",
 		Help: "Number of queries that were dropped due to the limit.",
 	}, []string{"reason"})
 	m.seriesRefetches = promauto.With(reg).NewCounter(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_series_refetches_total",
+		Name: "series_refetches_total",
 		Help: fmt.Sprintf("Total number of cases where %v bytes was not enough was to fetch series from index, resulting in refetch.", maxSeriesSize),
 	})
 
 	m.cachedPostingsCompressions = promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_cached_postings_compressions_total",
+		Name: "cached_postings_compressions_total",
 		Help: "Number of postings compressions before storing to index cache.",
 	}, []string{"op"})
 	m.cachedPostingsCompressions.WithLabelValues(labelEncode)
 	m.cachedPostingsCompressions.WithLabelValues(labelDecode)
 
 	m.cachedPostingsCompressionErrors = promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_cached_postings_compression_errors_total",
+		Name: "cached_postings_compression_errors_total",
 		Help: "Number of postings compression errors.",
 	}, []string{"op"})
 	m.cachedPostingsCompressionErrors.WithLabelValues(labelEncode)
 	m.cachedPostingsCompressionErrors.WithLabelValues(labelDecode)
 
 	m.cachedPostingsCompressionTimeSeconds = promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_cached_postings_compression_time_seconds_total",
+		Name: "cached_postings_compression_time_seconds_total",
 		Help: "Time spent compressing postings before storing them into postings cache.",
 	}, []string{"op"})
 	m.cachedPostingsCompressionTimeSeconds.WithLabelValues(labelEncode)
 	m.cachedPostingsCompressionTimeSeconds.WithLabelValues(labelDecode)
 
 	m.cachedPostingsOriginalSizeBytes = promauto.With(reg).NewCounter(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_cached_postings_original_size_bytes_total",
+		Name: "cached_postings_original_size_bytes_total",
 		Help: "Original size of postings stored into cache.",
 	})
 	m.cachedPostingsCompressedSizeBytes = promauto.With(reg).NewCounter(prometheus.CounterOpts{
-		Name: "thanos_bucket_store_cached_postings_compressed_size_bytes_total",
+		Name: "cached_postings_compressed_size_bytes_total",
 		Help: "Compressed size of postings stored into cache.",
 	})
 
 	m.seriesFetchDuration = promauto.With(reg).NewHistogram(prometheus.HistogramOpts{
-		Name:    "thanos_bucket_store_cached_series_fetch_duration_seconds",
+		Name:    "cached_series_fetch_duration_seconds",
 		Help:    "The time it takes to fetch series to respond to a request sent to a store gateway. It includes both the time to fetch it from the cache and from storage in case of cache misses.",
 		Buckets: []float64{0.001, 0.01, 0.1, 0.3, 0.6, 1, 3, 6, 9, 20, 30, 60, 90, 120},
 	})
 
 	m.postingsFetchDuration = promauto.With(reg).NewHistogram(prometheus.HistogramOpts{
-		Name:    "thanos_bucket_store_cached_postings_fetch_duration_seconds",
+		Name:    "cached_postings_fetch_duration_seconds",
 		Help:    "The time it takes to fetch postings to respond to a request sent to a store gateway. It includes both the time to fetch it from the cache and from storage in case of cache misses.",
 		Buckets: []float64{0.001, 0.01, 0.1, 0.3, 0.6, 1, 3, 6, 9, 20, 30, 60, 90, 120},
 	})
@@ -274,7 +274,7 @@ type FilterConfig struct {
 type BucketStore struct {
 	logger           log.Logger
 	reg              prometheus.Registerer // TODO(metalmatze) remove and add via BucketStoreOption
-	metrics          *bucketStoreMetrics
+	metrics          *BucketStoreMetrics
 	bkt              objstore.InstrumentedBucketReader
 	fetcher          block.MetadataFetcher
 	tombstoneFetcher tombstone.Fetcher
@@ -285,7 +285,7 @@ type BucketStore struct {
 
 	// Sets of blocks that have the same labels. They are indexed by a hash over their label set.
 	mtx       sync.RWMutex
-	blocks    map[ulid.ULID]*bucketBlock
+	blocks    map[ulid.ULID]*BucketBlock
 	blockSets map[uint64]*bucketBlockSet
 
 	// Verbose enabled additional logging.
@@ -411,7 +411,7 @@ func NewBucketStore(
 		dir:                         dir,
 		indexCache:                  noopCache{},
 		chunkPool:                   pool.NoopBytes{},
-		blocks:                      map[ulid.ULID]*bucketBlock{},
+		blocks:                      map[ulid.ULID]*BucketBlock{},
 		blockSets:                   map[uint64]*bucketBlockSet{},
 		blockSyncConcurrency:        blockSyncConcurrency,
 		queryGate:                   gate.NewNoop(),
@@ -430,7 +430,7 @@ func NewBucketStore(
 	// Depend on the options
 	indexReaderPoolMetrics := indexheader.NewReaderPoolMetrics(extprom.WrapRegistererWithPrefix("thanos_bucket_store_", s.reg))
 	s.indexReaderPool = indexheader.NewReaderPool(s.logger, lazyIndexReaderEnabled, lazyIndexReaderIdleTimeout, indexReaderPoolMetrics)
-	s.metrics = newBucketStoreMetrics(s.reg) // TODO(metalmatze): Might be possible via Option too
+	s.metrics = NewBucketStoreMetrics(extprom.WrapRegistererWithPrefix("thanos_bucket_store_", s.reg)) // TODO(metalmatze): Might be possible via Option too
 
 	if err := s.validate(); err != nil {
 		return nil, errors.Wrap(err, "validate config")
@@ -562,7 +562,7 @@ func (s *BucketStore) InitialSync(ctx context.Context) error {
 	return nil
 }
 
-func (s *BucketStore) getBlock(id ulid.ULID) *bucketBlock {
+func (s *BucketStore) getBlock(id ulid.ULID) *BucketBlock {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
 	return s.blocks[id]
@@ -606,7 +606,7 @@ func (s *BucketStore) addBlock(ctx context.Context, meta *metadata.Meta) (err er
 		}
 	}()
 
-	b, err := newBucketBlock(
+	b, err := NewBucketBlock(
 		ctx,
 		log.With(s.logger, "block", meta.ULID),
 		s.metrics,
@@ -963,7 +963,7 @@ func populateChunk(out *storepb.AggrChunk, in chunkenc.Chunk, aggrs []storepb.Ag
 // labels and resolution. This is important because we allow mixed resolution results, so it is quite crucial
 // to be aware what exactly resolution we see on query.
 // TODO(bplotka): Consider adding resolution label to all results to propagate that info to UI and Query API.
-func debugFoundBlockSetOverview(logger log.Logger, mint, maxt, maxResolutionMillis int64, lset labels.Labels, bs []*bucketBlock) {
+func debugFoundBlockSetOverview(logger log.Logger, mint, maxt, maxResolutionMillis int64, lset labels.Labels, bs []*BucketBlock) {
 	if len(bs) == 0 {
 		level.Debug(logger).Log("msg", "No block found", "mint", mint, "maxt", maxt, "lset", lset.String())
 		return
@@ -1062,7 +1062,7 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, srv storepb.Store_Serie
 
 			var chunkr *bucketChunkReader
 			// We must keep the readers open until all their data has been sent.
-			indexr := b.indexReader()
+			indexr := b.IndexReader()
 			if !req.SkipChunks {
 				chunkr = b.chunkReader()
 				defer runutil.CloseWithLogOnErr(s.logger, chunkr, "series block")
@@ -1263,7 +1263,7 @@ func (s *BucketStore) LabelNames(ctx context.Context, req *storepb.LabelNamesReq
 
 		resHints.AddQueriedBlock(b.meta.ULID)
 
-		indexr := b.indexReader()
+		indexr := b.IndexReader()
 
 		g.Go(func() error {
 			span, newCtx := tracing.StartSpan(gctx, "bucket_store_block_series", tracing.Tags{
@@ -1400,7 +1400,7 @@ func (s *BucketStore) LabelValues(ctx context.Context, req *storepb.LabelValuesR
 
 		resHints.AddQueriedBlock(b.meta.ULID)
 
-		indexr := b.indexReader()
+		indexr := b.IndexReader()
 		g.Go(func() error {
 			span, newCtx := tracing.StartSpan(gctx, "bucket_store_block_series", tracing.Tags{
 				"block.id":         b.meta.ULID,
@@ -1492,65 +1492,19 @@ func (s *BucketStore) SyncTombstones(ctx context.Context) error {
 				block.tombstoneCache.Delete(id)
 			}
 		}
-	}
-	for _, bs := range s.blockSets {
-		for tid, t := range tombstones {
-			if _, ok := t.MatchLabels(bs.labels); !ok {
+		for _, t := range tombstones {
+			t := t
+			matchers, ok := t.MatchMeta(block.meta)
+			if !ok {
 				continue
 			}
-			blocks := bs.getFor(t.MinTime, t.MaxTime, downsample.ResLevel2, nil)
-			for _, block := range blocks {
-				matchers, ok := t.MatchMeta(block.meta)
-				// Impossible as we get matches blocks already.
-				if !ok {
-					continue
-				}
-				if _, ok := block.tombstoneCache.Get(tid); ok {
-					continue
-				}
-
-				memTombstone := promtombstones.NewMemTombstones()
-				indexr := block.indexReader()
-				ps, err := indexr.ExpandedPostings(ctx, *matchers)
-				if err != nil {
-					continue
-				}
-				if len(ps) == 0 {
-					block.tombstoneCache.Set(tid, memTombstone)
-					continue
-				}
-				// Preload all series index data.
-				if err := indexr.PreloadSeries(ctx, ps); err != nil {
-					continue
-				}
-
-				// Transform all series into the response types and mark their relevant chunks
-				// for preloading.
-				var (
-					symbolizedLset []symbolizedLabel
-					chks           []chunks.Meta
-				)
-			PostingsLoop:
-				for _, id := range ps {
-					ok, err := indexr.LoadSeriesForTime(id, &symbolizedLset, &chks, false, t.MinTime, t.MaxTime)
-					if err != nil {
-						continue
-					}
-					if !ok {
-						// No matching chunks for this time duration, skip series.
-						continue
-					}
-					for _, chk := range chks {
-						if chk.OverlapsClosedInterval(t.MinTime, t.MaxTime) {
-							// Delete only until the current values and not beyond.
-							tmin, tmax := tombstone.ClampInterval(t.MinTime, t.MaxTime, chks[0].MinTime, chks[len(chks)-1].MaxTime)
-							memTombstone.AddInterval(id, promtombstones.Interval{Mint: tmin, Maxt: tmax})
-							continue PostingsLoop
-						}
-					}
-				}
-				block.tombstoneCache.Set(tid, memTombstone)
+			// Process tombstones for each block in the best effort manner.
+			// If error occurs we continue.
+			memTombstone, err := block.ProcessTombstone(ctx, *matchers, t.MinTime, t.MaxTime)
+			if err != nil {
+				continue
 			}
+			block.tombstoneCache.Set(t.ULID, memTombstone)
 		}
 	}
 	return nil
@@ -1562,7 +1516,7 @@ type bucketBlockSet struct {
 	labels      labels.Labels
 	mtx         sync.RWMutex
 	resolutions []int64          // Available resolution, high to low (in milliseconds).
-	blocks      [][]*bucketBlock // Ordered buckets for the existing resolutions.
+	blocks      [][]*BucketBlock // Ordered buckets for the existing resolutions.
 }
 
 // newBucketBlockSet initializes a new set with the known downsampling windows hard-configured.
@@ -1571,11 +1525,11 @@ func newBucketBlockSet(lset labels.Labels) *bucketBlockSet {
 	return &bucketBlockSet{
 		labels:      lset,
 		resolutions: []int64{downsample.ResLevel2, downsample.ResLevel1, downsample.ResLevel0},
-		blocks:      make([][]*bucketBlock, 3),
+		blocks:      make([][]*BucketBlock, 3),
 	}
 }
 
-func (s *bucketBlockSet) add(b *bucketBlock) error {
+func (s *bucketBlockSet) add(b *BucketBlock) error {
 	if !labels.Equal(s.labels, labels.FromMap(b.meta.Thanos.Labels)) {
 		return errors.New("block's label set does not match set")
 	}
@@ -1628,7 +1582,7 @@ func int64index(s []int64, x int64) int {
 // It supports overlapping blocks.
 //
 // NOTE: s.blocks are expected to be sorted in minTime order.
-func (s *bucketBlockSet) getFor(mint, maxt, maxResolutionMillis int64, blockMatchers []*labels.Matcher) (bs []*bucketBlock) {
+func (s *bucketBlockSet) getFor(mint, maxt, maxResolutionMillis int64, blockMatchers []*labels.Matcher) (bs []*BucketBlock) {
 	if mint > maxt {
 		return nil
 	}
@@ -1693,9 +1647,9 @@ func (s *bucketBlockSet) labelMatchers(matchers ...*labels.Matcher) ([]*labels.M
 
 // bucketBlock represents a block that is located in a bucket. It holds intermediate
 // state for the block on local disk.
-type bucketBlock struct {
+type BucketBlock struct {
 	logger     log.Logger
-	metrics    *bucketStoreMetrics
+	metrics    *BucketStoreMetrics
 	bkt        objstore.BucketReader
 	meta       *metadata.Meta
 	dir        string
@@ -1718,10 +1672,10 @@ type bucketBlock struct {
 	tombstoneCache *tombstone.MemTombstonesCache
 }
 
-func newBucketBlock(
+func NewBucketBlock(
 	ctx context.Context,
 	logger log.Logger,
-	metrics *bucketStoreMetrics,
+	metrics *BucketStoreMetrics,
 	meta *metadata.Meta,
 	bkt objstore.BucketReader,
 	dir string,
@@ -1729,8 +1683,8 @@ func newBucketBlock(
 	chunkPool pool.Bytes,
 	indexHeadReader indexheader.Reader,
 	p Partitioner,
-) (b *bucketBlock, err error) {
-	b = &bucketBlock{
+) (b *BucketBlock, err error) {
+	b = &BucketBlock{
 		logger:            logger,
 		metrics:           metrics,
 		bkt:               bkt,
@@ -1772,11 +1726,11 @@ func newBucketBlock(
 	return b, nil
 }
 
-func (b *bucketBlock) indexFilename() string {
+func (b *BucketBlock) indexFilename() string {
 	return path.Join(b.meta.ULID.String(), block.IndexFilename)
 }
 
-func (b *bucketBlock) readIndexRange(ctx context.Context, off, length int64) ([]byte, error) {
+func (b *BucketBlock) readIndexRange(ctx context.Context, off, length int64) ([]byte, error) {
 	r, err := b.bkt.GetRange(ctx, b.indexFilename(), off, length)
 	if err != nil {
 		return nil, errors.Wrap(err, "get range reader")
@@ -1794,7 +1748,7 @@ func (b *bucketBlock) readIndexRange(ctx context.Context, off, length int64) ([]
 	return buf.Bytes(), nil
 }
 
-func (b *bucketBlock) readChunkRange(ctx context.Context, seq int, off, length int64, chunkRanges byteRanges) (*[]byte, error) {
+func (b *BucketBlock) readChunkRange(ctx context.Context, seq int, off, length int64, chunkRanges byteRanges) (*[]byte, error) {
 	if seq < 0 || seq >= len(b.chunkObjs) {
 		return nil, errors.Errorf("unknown segment file for index %d", seq)
 	}
@@ -1820,7 +1774,7 @@ func (b *bucketBlock) readChunkRange(ctx context.Context, seq int, off, length i
 	return chunkBuffer, nil
 }
 
-func (b *bucketBlock) chunkRangeReader(ctx context.Context, seq int, off, length int64) (io.ReadCloser, error) {
+func (b *BucketBlock) chunkRangeReader(ctx context.Context, seq int, off, length int64) (io.ReadCloser, error) {
 	if seq < 0 || seq >= len(b.chunkObjs) {
 		return nil, errors.Errorf("unknown segment file for index %d", seq)
 	}
@@ -1828,18 +1782,18 @@ func (b *bucketBlock) chunkRangeReader(ctx context.Context, seq int, off, length
 	return b.bkt.GetRange(ctx, b.chunkObjs[seq], off, length)
 }
 
-func (b *bucketBlock) indexReader() *bucketIndexReader {
+func (b *BucketBlock) IndexReader() *bucketIndexReader {
 	b.pendingReaders.Add(1)
 	return newBucketIndexReader(b)
 }
 
-func (b *bucketBlock) chunkReader() *bucketChunkReader {
+func (b *BucketBlock) chunkReader() *bucketChunkReader {
 	b.pendingReaders.Add(1)
 	return newBucketChunkReader(b)
 }
 
 // matchRelabelLabels verifies whether the block matches the given matchers.
-func (b *bucketBlock) matchRelabelLabels(matchers []*labels.Matcher) bool {
+func (b *BucketBlock) matchRelabelLabels(matchers []*labels.Matcher) bool {
 	for _, m := range matchers {
 		if !m.Matches(b.relabelLabels.Get(m.Name)) {
 			return false
@@ -1849,22 +1803,70 @@ func (b *bucketBlock) matchRelabelLabels(matchers []*labels.Matcher) bool {
 }
 
 // overlapsClosedInterval returns true if the block overlaps [mint, maxt).
-func (b *bucketBlock) overlapsClosedInterval(mint, maxt int64) bool {
+func (b *BucketBlock) overlapsClosedInterval(mint, maxt int64) bool {
 	// The block itself is a half-open interval
 	// [b.meta.MinTime, b.meta.MaxTime).
 	return b.meta.MinTime <= maxt && mint < b.meta.MaxTime
 }
 
 // Close waits for all pending readers to finish and then closes all underlying resources.
-func (b *bucketBlock) Close() error {
+func (b *BucketBlock) Close() error {
 	b.pendingReaders.Wait()
 	return b.indexHeaderReader.Close()
+}
+
+func (b *BucketBlock) TombstoneCache() *tombstone.MemTombstonesCache {
+	return b.tombstoneCache
+}
+
+func (b *BucketBlock) ProcessTombstone(ctx context.Context, matchers []*labels.Matcher, minT, maxT int64) (*promtombstones.MemTombstones, error) {
+	memTombstone := promtombstones.NewMemTombstones()
+	indexr := b.IndexReader()
+	defer indexr.Close()
+	ps, err := indexr.ExpandedPostings(ctx, matchers)
+	if err != nil {
+		return nil, err
+	}
+	if len(ps) == 0 {
+		return memTombstone, nil
+	}
+	// Preload all series index data.
+	if err := indexr.PreloadSeries(ctx, ps); err != nil {
+		return nil, err
+	}
+
+	// Transform all series into the response types and mark their relevant chunks
+	// for preloading.
+	var (
+		symbolizedLset []symbolizedLabel
+		chks           []chunks.Meta
+	)
+PostingsLoop:
+	for _, id := range ps {
+		ok, err := indexr.LoadSeriesForTime(id, &symbolizedLset, &chks, false, minT, maxT)
+		if err != nil {
+			continue
+		}
+		if !ok {
+			// No matching chunks for this time duration, skip series.
+			continue
+		}
+		for _, chk := range chks {
+			if chk.OverlapsClosedInterval(minT, maxT) {
+				// Delete only until the current values and not beyond.
+				tmin, tmax := tombstone.ClampInterval(minT, maxT, chks[0].MinTime, chks[len(chks)-1].MaxTime)
+				memTombstone.AddInterval(id, promtombstones.Interval{Mint: tmin, Maxt: tmax})
+				continue PostingsLoop
+			}
+		}
+	}
+	return memTombstone, nil
 }
 
 // bucketIndexReader is a custom index reader (not conforming index.Reader interface) that reads index that is stored in
 // object storage without having to fully download it.
 type bucketIndexReader struct {
-	block *bucketBlock
+	block *BucketBlock
 	dec   *index.Decoder
 	stats *queryStats
 
@@ -1872,7 +1874,7 @@ type bucketIndexReader struct {
 	loadedSeries map[storage.SeriesRef][]byte
 }
 
-func newBucketIndexReader(block *bucketBlock) *bucketIndexReader {
+func newBucketIndexReader(block *BucketBlock) *bucketIndexReader {
 	r := &bucketIndexReader{
 		block: block,
 		dec: &index.Decoder{
@@ -2530,7 +2532,7 @@ type loadIdx struct {
 }
 
 type bucketChunkReader struct {
-	block *bucketBlock
+	block *BucketBlock
 
 	toLoad [][]loadIdx
 
@@ -2541,7 +2543,7 @@ type bucketChunkReader struct {
 	chunkBytes []*[]byte // Byte slice to return to the chunk pool on close.
 }
 
-func newBucketChunkReader(block *bucketBlock) *bucketChunkReader {
+func newBucketChunkReader(block *BucketBlock) *bucketChunkReader {
 	return &bucketChunkReader{
 		block:  block,
 		stats:  &queryStats{},

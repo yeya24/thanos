@@ -101,6 +101,12 @@ func UploadTombstone(ctx context.Context, tombstone *Tombstone, bkt objstore.Buc
 	return bkt.Upload(ctx, tsPath, bytes.NewBuffer(b))
 }
 
+// RemoveTombstone removes the tombstone from object storage
+func RemoveTombstone(ctx context.Context, ulid ulid.ULID, bkt objstore.Bucket) error {
+	tsPath := path.Join(TombstoneDir, ulid.String()+".json")
+	return bkt.Delete(ctx, tsPath)
+}
+
 // OverlapsClosedInterval Returns true if the chunk overlaps [mint, maxt].
 func (t *Tombstone) OverlapsClosedInterval(mint, maxt int64) bool {
 	return t.MinTime <= maxt && mint <= t.MaxTime
