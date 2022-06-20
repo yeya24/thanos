@@ -19,6 +19,11 @@ import (
 	"github.com/thanos-io/thanos/pkg/objstore"
 )
 
+const (
+	// TombstoneCompactionRatio is the default tombstone compaction ratio.
+	TombstoneCompactionRatio = 0.05
+)
+
 type tsdbBasedPlanner struct {
 	logger log.Logger
 
@@ -42,7 +47,7 @@ func NewTSDBBasedPlanner(logger log.Logger, ranges []int64) *tsdbBasedPlanner {
 		noCompBlocksFunc: func() map[ulid.ULID]*metadata.NoCompactMark {
 			return make(map[ulid.ULID]*metadata.NoCompactMark)
 		},
-		tombstoneCompactionRatio: 0.05,
+		tombstoneCompactionRatio: TombstoneCompactionRatio,
 	}
 }
 

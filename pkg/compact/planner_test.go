@@ -464,7 +464,7 @@ func TestTSDBBasedPlanner_PlanWithNoCompactMarks(t *testing.T) {
 	}
 
 	g := &GatherNoCompactionMarkFilter{}
-	tsdbBasedPlanner := NewPlanner(log.NewNopLogger(), ranges, g)
+	tsdbBasedPlanner := NewPlanner(log.NewNopLogger(), ranges, g, nil, TombstoneCompactionRatio)
 
 	for _, c := range []struct {
 		name           string
@@ -659,7 +659,7 @@ func TestLargeTotalIndexSizeFilter_Plan(t *testing.T) {
 	g := &GatherNoCompactionMarkFilter{}
 
 	marked := promauto.With(nil).NewCounter(prometheus.CounterOpts{})
-	planner := WithLargeTotalIndexSizeFilter(NewPlanner(log.NewNopLogger(), ranges, g), bkt, 100, marked)
+	planner := WithLargeTotalIndexSizeFilter(NewPlanner(log.NewNopLogger(), ranges, g, nil, TombstoneCompactionRatio), bkt, 100, marked)
 	var lastMarkValue float64
 	for _, c := range []struct {
 		name  string

@@ -1050,6 +1050,11 @@ func (cg *Group) compact(ctx context.Context, dir string, planner Planner, comp 
 			for _, t := range bb.TombstoneCache().GetTombstoneIDs() {
 				tombstoneSet[t] = struct{}{}
 			}
+			// Add child block applied tombstone ID as well in case
+			// the tombstone file still exists.
+			for _, t := range meta.Thanos.TombstonesApplied {
+				tombstoneSet[t] = struct{}{}
+			}
 			// Empty tombstone.
 			if ts.Total() == 0 {
 				continue
