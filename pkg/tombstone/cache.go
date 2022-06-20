@@ -75,6 +75,9 @@ func (m *MemTombstonesCache) MergeTombstones() *tombstones.MemTombstones {
 	stones := tombstones.NewMemTombstones()
 	m.mtx.RLock()
 	defer m.mtx.RUnlock()
+	if len(m.tombstones) == 0 {
+		return stones
+	}
 	if len(m.tombstones) == 1 {
 		for _, t := range m.tombstones {
 			return t

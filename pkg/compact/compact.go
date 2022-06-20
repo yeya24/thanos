@@ -1046,6 +1046,10 @@ func (cg *Group) compact(ctx context.Context, dir string, planner Planner, comp 
 
 		if bb := tombstoneSyncer.getBucketBlock(meta.ULID); bb != nil {
 			ts := bb.TombstoneCache().MergeTombstones()
+			// Empty tombstone.
+			if ts.Total() == 0 {
+				continue
+			}
 			if _, err := promtombstones.WriteFile(cg.logger, bdir, ts); err != nil {
 				return true, ulid.ULID{}, errors.Wrapf(err, "block id %s, failed to write tombstone file", meta.ULID)
 			}
