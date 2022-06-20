@@ -1363,7 +1363,7 @@ func registerBucketRetention(app extkingpin.AppClause, objStoreConfig *extflag.P
 				ignoreDeletionMarkFilter,
 				stubCounter,
 				stubCounter,
-				tbc.blockSyncConcurrency)
+			)
 			if err != nil {
 				return errors.Wrap(err, "create syncer")
 			}

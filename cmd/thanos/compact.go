@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/thanos-io/thanos/pkg/tombstone"
 	"os"
 	"path"
 	"strconv"
@@ -44,6 +43,7 @@ import (
 	"github.com/thanos-io/thanos/pkg/runutil"
 	httpserver "github.com/thanos-io/thanos/pkg/server/http"
 	"github.com/thanos-io/thanos/pkg/store"
+	"github.com/thanos-io/thanos/pkg/tombstone"
 	"github.com/thanos-io/thanos/pkg/tracing"
 	"github.com/thanos-io/thanos/pkg/ui"
 )
@@ -365,7 +365,7 @@ func runCompact(
 		compactMetrics.blocksMarked.WithLabelValues(metadata.NoCompactMarkFilename, metadata.IndexSizeExceedingNoCompactReason),
 	)
 	blocksCleaner := compact.NewBlocksCleaner(logger, bkt, ignoreDeletionMarkFilter, deleteDelay, compactMetrics.blocksCleaned, compactMetrics.blockCleanupFailures)
-	tombstoneSyncer, err := compact.NewTombstoneSyncer(logger, conf.dataDir, sy, tombstoneFetcher, reg)
+	tombstoneSyncer, err := compact.NewTombstoneSyncer(bkt, logger, conf.dataDir, sy, tombstoneFetcher, reg)
 	if err != nil {
 		return err
 	}
@@ -468,9 +468,8 @@ func runCompact(
 			level.Info(logger).Log("msg", "downsampling was explicitly disabled")
 		}
 
-		// TODO(bwplotka): Find a way to avoid syncing if no op was done.
-		if err := sy.SyncMetas(ctx); err != nil {
-			return errors.Wrap(err, "sync before retention")
+		if err := tombstoneSyncer.GarbageCollect(ctx); err != nil {
+			return errors.Wrap(err, "garbage collect tombstones")
 		}
 
 		if err := compact.ApplyRetentionPolicyByResolution(ctx, logger, bkt, sy.Metas(), retentionByResolution, compactMetrics.blocksMarked.WithLabelValues(metadata.DeletionMarkFilename, "")); err != nil {

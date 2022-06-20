@@ -35,7 +35,7 @@ type TombstoneSyncer struct {
 	indexCache       storecache.IndexCache
 }
 
-func NewTombstoneSyncer(logger log.Logger, dataDir string, syncer *Syncer, tombstoneFetcher tombstone.Fetcher, reg prometheus.Registerer) (*TombstoneSyncer, error) {
+func NewTombstoneSyncer(bkt objstore.InstrumentedBucket, logger log.Logger, dataDir string, syncer *Syncer, tombstoneFetcher tombstone.Fetcher, reg prometheus.Registerer) (*TombstoneSyncer, error) {
 	readerPool := indexheader.NewReaderPool(logger, false, 0, nil)
 	chunkPool, err := store.NewDefaultChunkBytesPool(uint64(1024 * 1024 * 1024 * 2))
 	if err != nil {
@@ -46,6 +46,7 @@ func NewTombstoneSyncer(logger log.Logger, dataDir string, syncer *Syncer, tombs
 		MaxItemSize: storecache.DefaultInMemoryIndexCacheConfig.MaxItemSize,
 	})
 	return &TombstoneSyncer{
+		bkt:              bkt,
 		logger:           logger,
 		dataDir:          dataDir,
 		sy:               syncer,
@@ -96,6 +97,7 @@ func (t *TombstoneSyncer) SyncTombstones(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
+				t.bucketBlocks[meta.ULID] = b
 			}
 
 			if _, ok := b.TombstoneCache().Get(tb.ULID); ok {
@@ -137,7 +139,7 @@ func (t *TombstoneSyncer) GarbageCollect(ctx context.Context) error {
 OUTER:
 	for _, tb := range tombstones {
 		for _, meta := range metas {
-			if _, ok := tb.MatchMeta(meta); ok {
+			if _, ok := tb.MatchMeta(meta); !ok {
 				continue
 			}
 
