@@ -109,6 +109,11 @@ func (c queryInstantCodec) DecodeRequest(_ context.Context, r *http.Request, for
 		return nil, err
 	}
 
+	result.NumShards, err = parseNumShards(r.Form, numShardsParam)
+	if err != nil {
+		return nil, err
+	}
+
 	result.Query = r.FormValue("query")
 	result.Path = r.URL.Path
 

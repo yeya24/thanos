@@ -8,9 +8,9 @@ package queryfrontend
 
 import (
 	"context"
+	"github.com/pkg/errors"
 
 	"github.com/thanos-io/thanos/internal/cortex/querier/queryrange"
-
 	"github.com/thanos-io/thanos/pkg/querysharding"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
 )
@@ -38,6 +38,14 @@ type querySharder struct {
 }
 
 func (s querySharder) Do(ctx context.Context, r queryrange.Request) (queryrange.Response, error) {
+	tr, ok := r.(ShardedQuery)
+	if !ok {
+		return nil, errors.New("")
+	}
+	if tr.GetNumShards() == 1 {
+		return s.next.Do(ctx, r)
+	}
+
 	analysis, err := s.queryAnalyzer.Analyze(r.GetQuery())
 	if err != nil {
 		return nil, err
@@ -47,7 +55,14 @@ func (s querySharder) Do(ctx context.Context, r queryrange.Request) (queryrange.
 		return s.next.Do(ctx, r)
 	}
 
-	reqs := s.shardQuery(r, analysis)
+	shards := s.numShards
+	if tr.GetNumShards() > 0 {
+		shards = tr.GetNumShards()
+	}
+	if shards == 1 {
+		return s.next.Do(ctx, r)
+	}
+	reqs := s.shardQuery(tr, analysis, shards)
 
 	reqResps, err := queryrange.DoRequests(ctx, s.next, reqs, s.limits)
 	if err != nil {
@@ -66,16 +81,11 @@ func (s querySharder) Do(ctx context.Context, r queryrange.Request) (queryrange.
 	return response, nil
 }
 
-func (s querySharder) shardQuery(r queryrange.Request, analysis querysharding.QueryAnalysis) []queryrange.Request {
-	tr, ok := r.(ShardedQuery)
-	if !ok {
-		return []queryrange.Request{r}
-	}
-
-	reqs := make([]queryrange.Request, s.numShards)
-	for i := 0; i < s.numShards; i++ {
+func (s querySharder) shardQuery(tr ShardedQuery, analysis querysharding.QueryAnalysis, shards int) []queryrange.Request {
+	reqs := make([]queryrange.Request, shards)
+	for i := 0; i < shards; i++ {
 		reqs[i] = tr.WithShardInfo(&storepb.ShardInfo{
-			TotalShards: int64(s.numShards),
+			TotalShards: int64(shards),
 			ShardIndex:  int64(i),
 			By:          analysis.ShardBy(),
 			Labels:      analysis.ShardingLabels(),

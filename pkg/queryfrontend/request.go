@@ -16,6 +16,10 @@ import (
 	"github.com/thanos-io/thanos/internal/cortex/querier/queryrange"
 )
 
+const (
+	numShardsParam = "shards"
+)
+
 // ThanosRequestStoreMatcherGetter is a an interface for store matching that all request share.
 // TODO(yeya24): Add partial result when needed.
 type ThanosRequestStoreMatcherGetter interface {
@@ -25,6 +29,7 @@ type ThanosRequestStoreMatcherGetter interface {
 // ShardedQuery interface represents a query that can be sharded.
 type ShardedQuery interface {
 	WithShardInfo(info *storepb.ShardInfo) queryrange.Request
+	GetNumShards() int
 }
 
 type RequestHeader struct {
@@ -54,7 +59,12 @@ type ThanosQueryRangeRequest struct {
 	Headers             []*RequestHeader
 	Stats               string
 	ShardInfo           *storepb.ShardInfo
+	NumShards           int
 }
+
+func (r *ThanosQueryInstantRequest) GetNumShards() int { return r.NumShards }
+
+func (r *ThanosQueryRangeRequest) GetNumShards() int { return r.NumShards }
 
 // IsDedupEnabled returns true if deduplication is enabled.
 func (r *ThanosQueryRangeRequest) IsDedupEnabled() bool { return r.Dedup }
@@ -152,6 +162,7 @@ type ThanosQueryInstantRequest struct {
 	Headers             []*RequestHeader
 	Stats               string
 	ShardInfo           *storepb.ShardInfo
+	NumShards           int
 }
 
 // IsDedupEnabled returns true if deduplication is enabled.

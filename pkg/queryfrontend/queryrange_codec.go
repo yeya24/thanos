@@ -123,6 +123,11 @@ func (c queryRangeCodec) DecodeRequest(_ context.Context, r *http.Request, forwa
 		return nil, err
 	}
 
+	result.NumShards, err = parseNumShards(r.Form, numShardsParam)
+	if err != nil {
+		return nil, err
+	}
+
 	result.Query = r.FormValue("query")
 	result.Path = r.URL.Path
 
@@ -276,6 +281,27 @@ func parseShardInfo(ss url.Values, key string) (*storepb.ShardInfo, error) {
 	}
 
 	return &info, nil
+}
+
+func parseNumShards(ss url.Values, key string) (int, error) {
+	data, ok := ss[key]
+	if !ok {
+		return 0, nil
+	}
+
+	if len(data) == 0 {
+		return 0, nil
+	}
+
+	shards, err := strconv.Atoi(data[0])
+	if err != nil {
+		return 0, err
+	}
+
+	if shards < 0 {
+		return 0, httpgrpc.Errorf(http.StatusBadRequest, "negative number of shards is not accepted. Try a positive integer")
+	}
+	return shards, nil
 }
 
 func encodeTime(t int64) string {
