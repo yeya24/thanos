@@ -644,6 +644,7 @@ func runQuery(
 	}
 
 	lookbackDeltaCreator := LookbackDeltaFactory(engineOpts, dynamicLookbackDelta)
+	noStepSubqueryIntervalFnCreator := NoStepSubqueryIntervalFnFactory(defaultEvaluationInterval.Milliseconds())
 
 	// Start query API + UI HTTP server.
 	{
@@ -675,6 +676,7 @@ func runQuery(
 			endpoints.GetEndpointStatus,
 			queryEngine,
 			lookbackDeltaCreator,
+			noStepSubqueryIntervalFnCreator,
 			queryableCreator,
 			// NOTE: Will share the same replica label as the query for now.
 			rules.NewGRPCClientWithDedup(rulesProxy, queryReplicaLabels),
@@ -836,5 +838,38 @@ func LookbackDeltaFactory(
 			}
 		}
 		return lds[0]
+	}
+}
+
+// LookbackDeltaFactory creates from 1 to 3 lookback deltas depending on
+// dynamicLookbackDelta and eo.LookbackDelta and returns a function
+// that returns appropriate lookback delta for given maxSourceResolutionMillis.
+func NoStepSubqueryIntervalFnFactory(
+	defaultEvaluationInterval int64,
+) func(int64) func(rangeMillis int64) int64 {
+	resolutions := []int64{downsample.ResLevel0, downsample.ResLevel1, downsample.ResLevel2}
+	var intervals = make([]int64, len(resolutions))
+
+	evalInterval := defaultEvaluationInterval
+	for i, r := range resolutions {
+		if evalInterval < r {
+			evalInterval = r
+		}
+
+		intervals[i] = evalInterval
+	}
+	return func(maxSourceResolutionMillis int64) func(rangeMillis int64) int64 {
+		return func(rangeMillis int64) int64 {
+			for i := len(resolutions) - 1; i >= 1; i-- {
+				left := resolutions[i-1]
+				if resolutions[i-1] < defaultEvaluationInterval {
+					left = defaultEvaluationInterval
+				}
+				if left < maxSourceResolutionMillis {
+					return intervals[i]
+				}
+			}
+			return intervals[0]
+		}
 	}
 }

@@ -75,7 +75,7 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return errors.Wrap(err, "server could not be started")
 	}
-	return errors.Wrap(toolkit_web.ListenAndServe(s.srv, s.opts.tlsConfigPath, s.logger), "serve HTTP and metrics")
+	return errors.Wrap(toolkit_web.ListenAndServe(s.srv, nil, s.logger), "serve HTTP and metrics")
 }
 
 // Shutdown gracefully shuts down the server by waiting,

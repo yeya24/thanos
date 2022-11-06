@@ -94,3 +94,32 @@ func TestLookbackDeltaFactory(t *testing.T) {
 		}
 	}
 }
+
+func TestNoStepSubqueryIntervalFnFactory(t *testing.T) {
+	type testCase struct {
+		stepMillis int64
+		expect     int64
+	}
+	var (
+		minute = time.Minute.Milliseconds()
+		// hour   = time.Hour.Milliseconds()
+		tData = []struct {
+			defaultEvaluationInterval int64
+			tcs                       []testCase
+		}{
+			{
+				defaultEvaluationInterval: minute,
+				tcs: []testCase{
+					{2 * minute, minute},
+				},
+			},
+		}
+	)
+	for _, td := range tData {
+		noStepSubqueryIntervalFnCreate := NoStepSubqueryIntervalFnFactory(td.defaultEvaluationInterval)
+		for _, tc := range td.tcs {
+			fn := noStepSubqueryIntervalFnCreate(tc.stepMillis)
+			testutil.Equals(t, tc.expect, fn(0))
+		}
+	}
+}

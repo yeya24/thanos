@@ -82,12 +82,13 @@ type QueryAPI struct {
 	gate            gate.Gate
 	queryableCreate query.QueryableCreator
 	// queryEngine returns appropriate promql.Engine for a query with a given step.
-	queryEngine         v1.QueryEngine
-	lookbackDeltaCreate func(int64) time.Duration
-	ruleGroups          rules.UnaryClient
-	targets             targets.UnaryClient
-	metadatas           metadata.UnaryClient
-	exemplars           exemplars.UnaryClient
+	queryEngine                    v1.QueryEngine
+	lookbackDeltaCreate            func(int64) time.Duration
+	noStepSubqueryIntervalFnCreate func(int64) func(int64) int64
+	ruleGroups                     rules.UnaryClient
+	targets                        targets.UnaryClient
+	metadatas                      metadata.UnaryClient
+	exemplars                      exemplars.UnaryClient
 
 	enableAutodownsampling              bool
 	enableQueryPartialResponse          bool
@@ -121,6 +122,7 @@ func NewQueryAPI(
 	endpointStatus func() []query.EndpointStatus,
 	qe v1.QueryEngine,
 	lookbackDeltaCreate func(int64) time.Duration,
+	noStepSubqueryIntervalFnCreate func(int64) func(int64) int64,
 	c query.QueryableCreator,
 	ruleGroups rules.UnaryClient,
 	targets targets.UnaryClient,
@@ -151,6 +153,7 @@ func NewQueryAPI(
 		logger:                                 logger,
 		queryEngine:                            qe,
 		lookbackDeltaCreate:                    lookbackDeltaCreate,
+		noStepSubqueryIntervalFnCreate:         noStepSubqueryIntervalFnCreate,
 		queryableCreate:                        c,
 		gate:                                   gate,
 		ruleGroups:                             ruleGroups,
@@ -403,6 +406,8 @@ func (qapi *QueryAPI) query(r *http.Request) (interface{}, []error, *api.ApiErro
 		lookbackDelta = lookbackDeltaFromReq
 	}
 
+	noStepSubqueryIntervalFn := qapi.noStepSubqueryIntervalFnCreate(maxSourceResolution)
+
 	// We are starting promQL tracing span here, because we have no control over promQL code.
 	span, ctx := tracing.StartSpan(ctx, "promql_instant_query")
 	defer span.Finish()
@@ -420,7 +425,7 @@ func (qapi *QueryAPI) query(r *http.Request) (interface{}, []error, *api.ApiErro
 			shardInfo,
 			query.NewAggregateStatsReporter(&seriesStats),
 		),
-		&promql.QueryOpts{LookbackDelta: lookbackDelta},
+		&promql.QueryOpts{LookbackDelta: lookbackDelta, NoStepSubqueryIntervalFn: noStepSubqueryIntervalFn},
 		r.FormValue("query"),
 		ts,
 	)
@@ -551,6 +556,8 @@ func (qapi *QueryAPI) queryRange(r *http.Request) (interface{}, []error, *api.Ap
 		lookbackDelta = lookbackDeltaFromReq
 	}
 
+	noStepSubqueryIntervalFn := qapi.noStepSubqueryIntervalFnCreate(maxSourceResolution)
+
 	// Record the query range requested.
 	qapi.queryRangeHist.Observe(end.Sub(start).Seconds())
 
@@ -571,7 +578,7 @@ func (qapi *QueryAPI) queryRange(r *http.Request) (interface{}, []error, *api.Ap
 			shardInfo,
 			query.NewAggregateStatsReporter(&seriesStats),
 		),
-		&promql.QueryOpts{LookbackDelta: lookbackDelta},
+		&promql.QueryOpts{LookbackDelta: lookbackDelta, NoStepSubqueryIntervalFn: noStepSubqueryIntervalFn},
 		r.FormValue("query"),
 		start,
 		end,
