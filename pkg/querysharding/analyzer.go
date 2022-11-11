@@ -5,7 +5,6 @@ package querysharding
 
 import (
 	"fmt"
-
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/promql/parser"
@@ -26,7 +25,6 @@ type CachedQueryAnalyzer struct {
 }
 
 var nonShardableFuncs = []string{
-	"label_join",
 	"label_replace",
 }
 
@@ -86,13 +84,21 @@ func (a *QueryAnalyzer) Analyze(query string) (QueryAnalysis, error) {
 	}
 
 	isShardable := true
-	var analysis QueryAnalysis
+	var (
+		analysis QueryAnalysis
+		// Destination label used in label_join function.
+		dstLabel string
+	)
 	parser.Inspect(expr, func(node parser.Node, nodes []parser.Node) error {
 		switch n := node.(type) {
 		case *parser.Call:
-			if n.Func != nil && contains(n.Func.Name, nonShardableFuncs) {
-				isShardable = false
-				return fmt.Errorf("expressions with %s are not shardable", n.Func.Name)
+			if n.Func != nil {
+				if contains(n.Func.Name, nonShardableFuncs) {
+					isShardable = false
+					return fmt.Errorf("expressions with %s are not shardable", n.Func.Name)
+				} else if n.Func.Name == "label_join" {
+					dstLabel = stringFromArg(n.Args[1])
+				}
 			}
 		case *parser.BinaryExpr:
 			if n.VectorMatching != nil {
@@ -154,4 +160,28 @@ func contains(needle string, haystack []string) bool {
 	}
 
 	return false
+}
+
+func stringFromArg(e parser.Expr) string {
+	tmp := unwrapStepInvariantExpr(e) // Unwrap StepInvariant
+	unwrapParenExpr(&tmp)             // Optionally unwrap ParenExpr
+	return tmp.(*parser.StringLiteral).Val
+}
+
+func unwrapStepInvariantExpr(e parser.Expr) parser.Expr {
+	if p, ok := e.(*parser.StepInvariantExpr); ok {
+		return p.Expr
+	}
+	return e
+}
+
+// unwrapParenExpr does the AST equivalent of removing parentheses around a expression.
+func unwrapParenExpr(e *parser.Expr) {
+	for {
+		if p, ok := (*e).(*parser.ParenExpr); ok {
+			*e = p.Expr
+		} else {
+			break
+		}
+	}
 }
