@@ -6,6 +6,7 @@ package receive
 import (
 	"context"
 	"fmt"
+	"github.com/prometheus/prometheus/tsdb/chunks"
 	"os"
 	"path"
 	"path/filepath"
@@ -541,14 +542,73 @@ func (t *MultiTSDB) TenantStats(statsByLabelName string, tenantIDs ...string) []
 			if db == nil {
 				return
 			}
-			stats := db.Head().Stats(statsByLabelName)
+			head := db.Head()
+			indexReader, err := head.Index()
+			if err != nil {
+				return
+			}
 
-			mu.Lock()
-			defer mu.Unlock()
-			result = append(result, status.TenantStats{
-				Tenant: tenantID,
-				Stats:  stats,
-			})
+			// match[] param you can specify multiple matchers
+			// optional
+			postings, err := indexReader.Postings("", "")
+			// TODO: handle errr
+
+			// {job="prometheus"}, {job=~"prometh.*"}, != , !~
+			// indexReader.Postings(matcher.Name, matcher.Value)
+
+			focusLabel := ""
+
+			var chks []chunks.Meta
+			var builder labels.ScratchBuilder
+			var matchers []*labels.Matcher
+			labelNameCardinalityMap := make(map[string]int)
+			labelNameValueCardinalityMap := make(map[string]int)
+			for postings.Next() {
+				p := postings.At()
+				if err := indexReader.Series(p, &builder, &chks); err != nil {
+					// handle it
+				}
+				lbls := builder.Labels()
+
+				for _, matcher := range matchers {
+					// return "" if the target label name doesn't exist.
+					// return the label value if exists.
+					value := lbls.Get(matcher.Name)
+					if value != "" {
+						if matcher.Matches(value) {
+							// skip to next series
+						}
+					}
+				}
+
+				value := lbls.Get(focusLabel)
+				totalSeries += 1
+				lbls.Range(func(l labels.Label) {
+					name := l.Name
+					value := l.Value
+					if _, exists := labelNameCardinalityMap[name]; !exists {
+						labelNameCardinalityMap[name] = 1
+					} else {
+						labelNameCardinalityMap[name] += 1
+					}
+
+					combination := name + ":" + value
+					if _, exists := labelNameValueCardinalityMap[combination]; !exists {
+						labelNameValueCardinalityMap[combination] = 1
+					} else {
+						labelNameValueCardinalityMap[combination] += 1
+					}
+				})
+			}
+
+			//stats := db.Head().Stats(statsByLabelName)
+			//
+			//mu.Lock()
+			//defer mu.Unlock()
+			//result = append(result, status.TenantStats{
+			//	Tenant: tenantID,
+			//	Stats:  stats,
+			//})
 		}(tenantID, tenantInstance)
 	}
 	wg.Wait()
