@@ -5,6 +5,7 @@ package block
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path"
@@ -105,5 +106,13 @@ func TestVerifyIndex(t *testing.T) {
 	f := path.Join(d, IndexFilename)
 	m, err := metadata.ReadFromDir(d)
 	testutil.Ok(t, err)
-	VerifyIndex(logger, f, m.MinTime, m.MaxTime)
+	stats, err := GatherIndexHealthStats(logger, f, m.MinTime, m.MaxTime)
+	testutil.Ok(t, err)
+	fmt.Printf("block %s\n", m.ULID.String())
+	fmt.Printf("Chunk MinSize %d\n", stats.ChunkMinSize)
+	fmt.Printf("Chunk MaxSize %d\n", stats.ChunkMaxSize)
+	fmt.Printf("Chunk AvgSize %d\n", stats.ChunkAvgSize)
+	fmt.Printf("Series MinSize %d\n", stats.SeriesMinSize)
+	fmt.Printf("Series MaxSize %d\n", stats.SeriesMaxSize)
+	fmt.Printf("Series AvgSize %d\n", stats.SeriesAvgSize)
 }

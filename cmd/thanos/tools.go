@@ -4,7 +4,11 @@
 package main
 
 import (
+	"fmt"
+	"github.com/thanos-io/thanos/pkg/block"
+	"github.com/thanos-io/thanos/pkg/block/metadata"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/go-kit/log"
@@ -23,16 +27,46 @@ type checkRulesConfig struct {
 	rulesFiles []string
 }
 
+type indexStatsConfig struct {
+	dir string
+}
+
 func registerTools(app *extkingpin.App) {
 	cmd := app.Command("tools", "Tools utility commands")
 
 	registerBucket(cmd)
 	registerCheckRules(cmd)
+	registerIndexStats(cmd)
 }
 
 func (tc *checkRulesConfig) registerFlag(cmd extkingpin.FlagClause) *checkRulesConfig {
 	cmd.Flag("rules", "The rule files glob to check (repeated).").Required().StringsVar(&tc.rulesFiles)
 	return tc
+}
+
+func (tc *indexStatsConfig) registerFlag(cmd extkingpin.FlagClause) *indexStatsConfig {
+	cmd.Flag("dir", "block dir to check index stats").Required().StringVar(&tc.block)
+	return tc
+}
+
+func registerIndexStats(app extkingpin.AppClause) {
+	cmd := app.Command("index-stats", "Gather stats of TSDB index")
+	isc := &indexStatsConfig{}
+	isc.registerFlag(cmd)
+	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ <-chan struct{}, _ bool) error {
+		// Dummy actor to immediately kill the group after the run function returns.
+		g.Add(func() error { return nil }, func(error) {})
+		meta, err := metadata.ReadFromDir(isc.dir)
+		if err != nil {
+			return err
+		}
+		stats, err := block.GatherIndexHealthStats(logger, path.Join(isc.dir, block.IndexFilename), meta.MinTime, meta.MaxTime)
+		if err != nil {
+			return err
+		}
+		fmt.Println(stats)
+		return nil
+	})
 }
 
 func registerCheckRules(app extkingpin.AppClause) {

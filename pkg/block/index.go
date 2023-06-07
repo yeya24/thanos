@@ -258,7 +258,7 @@ func GatherIndexHealthStats(logger log.Logger, fn string, minTime, maxTime int64
 		id := p.At()
 		if prevId != 0 {
 			// Approximate series size.
-			seriesSize.Add((int64(id) - int64(prevId)) * 16)
+			seriesSize.Add((int64(id)-int64(prevId))*16 - 4)
 		}
 		prevId = id
 		stats.TotalSeries++
