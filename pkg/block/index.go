@@ -302,9 +302,15 @@ func GatherIndexHealthStats(logger log.Logger, fn string, minTime, maxTime int64
 				stats.SingleSampleChunks++
 			}
 
+			sgmIndex := int(c.Ref >> 32)
+			chkStart := int((c.Ref << 32) >> 32)
 			// Approximate size.
 			if i < len(chks)-2 {
-				chunkSize.Add(int64(chks[i+1].Ref - c.Ref))
+				sgmIndex2 := int(chks[i+1].Ref >> 32)
+				chkStart2 := int((chks[i+1].Ref << 32) >> 32)
+				if sgmIndex == sgmIndex2 {
+					chunkSize.Add(int64(chkStart2 - chkStart))
+				}
 			}
 
 			// Chunk vs the block ranges.

@@ -102,7 +102,7 @@ func TestGatherIndexHealthStatsReturnsOutOfOrderChunksErr(t *testing.T) {
 
 func TestVerifyIndex(t *testing.T) {
 	logger := log.NewLogfmtLogger(os.Stdout)
-	d := "/Users/benye/01H1ARP7TT3VS5TS16GF7MHTTM"
+	d := "/Users/benye/prom/prometheus-2.39.1.darwin-arm64/data/01H1W59HCZXMNG4C0NNPHK1TBQ"
 	f := path.Join(d, IndexFilename)
 	m, err := metadata.ReadFromDir(d)
 	testutil.Ok(t, err)
