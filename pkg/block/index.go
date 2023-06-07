@@ -85,6 +85,10 @@ type HealthStats struct {
 	ChunkAvgSize int64
 	ChunkMaxSize int64
 
+	SeriesMinSize int64
+	SeriesAvgSize int64
+	SeriesMaxSize int64
+
 	SingleSampleSeries int64
 	SingleSampleChunks int64
 
@@ -231,6 +235,7 @@ func GatherIndexHealthStats(logger log.Logger, fn string, minTime, maxTime int64
 		seriesChunks                                = newMinMaxSumInt64()
 		chunkDuration                               = newMinMaxSumInt64()
 		chunkSize                                   = newMinMaxSumInt64()
+		seriesSize                                  = newMinMaxSumInt64()
 	)
 
 	lnames, err := r.LabelNames()
@@ -245,11 +250,17 @@ func GatherIndexHealthStats(logger log.Logger, fn string, minTime, maxTime int64
 	}
 	stats.MetricLabelValuesCount = int64(len(lvals))
 
+	var prevId storage.SeriesRef
 	// Per series.
 	for p.Next() {
 		lastLset = append(lastLset[:0], lset...)
 
 		id := p.At()
+		if prevId != 0 {
+			// Approximate series size.
+			seriesSize.Add((int64(id) - int64(prevId)) * 16)
+		}
+		prevId = id
 		stats.TotalSeries++
 
 		if err := r.Series(id, &builder, &chks); err != nil {
@@ -361,6 +372,10 @@ func GatherIndexHealthStats(logger log.Logger, fn string, minTime, maxTime int64
 	stats.ChunkMaxSize = chunkSize.max
 	stats.ChunkAvgSize = chunkSize.Avg()
 	stats.ChunkMinSize = chunkSize.min
+
+	stats.SeriesMaxSize = seriesSize.max
+	stats.SeriesAvgSize = seriesSize.Avg()
+	stats.SeriesMinSize = seriesSize.min
 
 	stats.ChunkMaxDuration = time.Duration(chunkDuration.max) * time.Millisecond
 	stats.ChunkAvgDuration = time.Duration(chunkDuration.Avg()) * time.Millisecond

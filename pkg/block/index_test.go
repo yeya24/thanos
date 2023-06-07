@@ -7,6 +7,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 
@@ -96,4 +97,13 @@ func TestGatherIndexHealthStatsReturnsOutOfOrderChunksErr(t *testing.T) {
 	testutil.Ok(t, err)
 	testutil.Equals(t, 1, stats.OutOfOrderChunks)
 	testutil.NotOk(t, stats.OutOfOrderChunksErr())
+}
+
+func TestVerifyIndex(t *testing.T) {
+	logger := log.NewLogfmtLogger(os.Stdout)
+	d := "/Users/benye/01H1ARP7TT3VS5TS16GF7MHTTM"
+	f := path.Join(d, IndexFilename)
+	m, err := metadata.ReadFromDir(d)
+	testutil.Ok(t, err)
+	VerifyIndex(logger, f, m.MinTime, m.MaxTime)
 }
