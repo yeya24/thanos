@@ -45,7 +45,7 @@ func (tc *checkRulesConfig) registerFlag(cmd extkingpin.FlagClause) *checkRulesC
 }
 
 func (tc *indexStatsConfig) registerFlag(cmd extkingpin.FlagClause) *indexStatsConfig {
-	cmd.Flag("dir", "block dir to check index stats").Required().StringVar(&tc.block)
+	cmd.Flag("dir", "block dir to check index stats").Required().StringVar(&tc.dir)
 	return tc
 }
 
