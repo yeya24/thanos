@@ -64,7 +64,25 @@ func registerIndexStats(app extkingpin.AppClause) {
 		if err != nil {
 			return err
 		}
-		fmt.Println(stats)
+		fmt.Printf("block %s\n", meta.ULID.String())
+		fmt.Printf("block range %d\n", meta.MaxTime-meta.MinTime)
+		fmt.Printf("Chunk MinSize %d\n", stats.ChunkMinSize)
+		fmt.Printf("Chunk MaxSize %d\n", stats.ChunkMaxSize)
+		fmt.Printf("Chunk AvgSize %d\n", stats.ChunkAvgSize)
+		fmt.Printf("Series MinSize %d\n", stats.SeriesMinSize)
+		fmt.Printf("Series MaxSize %d\n", stats.SeriesMaxSize)
+		fmt.Printf("Series AvgSize %d\n", stats.SeriesAvgSize)
+		fmt.Printf("Chunk MinDuration %d\n", stats.ChunkMinDuration)
+		fmt.Printf("Chunk MaxDuration %d\n", stats.ChunkMaxDuration)
+		fmt.Printf("Chunk AvgDuration %d\n", stats.ChunkAvgDuration)
+		fmt.Printf("Series MinChunks %d\n", stats.SeriesMinChunks)
+		fmt.Printf("Series MaxChunks %d\n", stats.SeriesMaxChunks)
+		fmt.Printf("Series AvgChunks %d\n", stats.SeriesAvgChunks)
+		fmt.Printf("Series MinLifeDuration %d\n", stats.SeriesMinLifeDuration)
+		fmt.Printf("Series MaxLifeDuration %d\n", stats.SeriesMaxLifeDuration)
+		fmt.Printf("Series AvgLifeDuration %d\n", stats.SeriesAvgLifeDuration)
+		fmt.Printf("SingleSampleSeries %d\n", stats.SingleSampleSeries)
+		fmt.Printf("SingleSampleChunks %d\n", stats.SingleSampleChunks)
 		return nil
 	})
 }
