@@ -2014,6 +2014,14 @@ func newBucketBlock(
 	maxSeriesSizeFunc BlockEstimator,
 	maxChunkSizeFunc BlockEstimator,
 ) (b *bucketBlock, err error) {
+	maxSeriesSize := EstimatedMaxSeriesSize
+	if maxSeriesSizeFunc != nil {
+		maxSeriesSize = int(maxSeriesSizeFunc(*meta))
+	}
+	maxChunkSize := EstimatedMaxChunkSize
+	if maxChunkSizeFunc != nil {
+		maxChunkSize = int(maxChunkSizeFunc(*meta))
+	}
 	b = &bucketBlock{
 		logger:            logger,
 		metrics:           metrics,
@@ -2031,8 +2039,8 @@ func newBucketBlock(
 			Name:  block.BlockIDLabel,
 			Value: meta.ULID.String(),
 		}),
-		estimatedMaxSeriesSize: int(maxSeriesSizeFunc(*meta)),
-		estimatedMaxChunkSize:  int(maxChunkSizeFunc(*meta)),
+		estimatedMaxSeriesSize: maxSeriesSize,
+		estimatedMaxChunkSize:  maxChunkSize,
 	}
 	sort.Sort(b.extLset)
 	sort.Sort(b.relabelLabels)
