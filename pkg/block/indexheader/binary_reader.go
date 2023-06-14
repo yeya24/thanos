@@ -767,6 +767,10 @@ func (r *BinaryReader) PostingsOffset(name, value string) (index.Range, error) {
 	return rngs[0], nil
 }
 
+func (r *BinaryReader) PostingsOffsets(name string, values ...string) ([]index.Range, error) {
+	return r.postingsOffset(name, values...)
+}
+
 func skipNAndName(d *encoding.Decbuf, buf *int) {
 	if *buf == 0 {
 		// Keycount+LabelName are always the same number of bytes,

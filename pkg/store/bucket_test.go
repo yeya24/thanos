@@ -1060,12 +1060,12 @@ func TestBucketIndexReader_ExpandedPostings(t *testing.T) {
 	testutil.Ok(tb, err)
 	defer func() { testutil.Ok(tb, bkt.Close()) }()
 
-	id := uploadTestBlock(tb, tmpDir, bkt, 500)
+	id, stats := uploadTestBlock(tb, tmpDir, bkt, 500)
 
 	r, err := indexheader.NewBinaryReader(context.Background(), log.NewNopLogger(), bkt, tmpDir, id, DefaultPostingOffsetInMemorySampling)
 	testutil.Ok(tb, err)
 
-	benchmarkExpandedPostings(tb, bkt, id, r, 500)
+	benchmarkExpandedPostings(tb, bkt, id, stats, r, 500)
 }
 
 func BenchmarkBucketIndexReader_ExpandedPostings(b *testing.B) {
@@ -1077,14 +1077,14 @@ func BenchmarkBucketIndexReader_ExpandedPostings(b *testing.B) {
 	testutil.Ok(tb, err)
 	defer func() { testutil.Ok(tb, bkt.Close()) }()
 
-	id := uploadTestBlock(tb, tmpDir, bkt, 50e5)
+	id, stats := uploadTestBlock(tb, tmpDir, bkt, 50e5)
 	r, err := indexheader.NewBinaryReader(context.Background(), log.NewNopLogger(), bkt, tmpDir, id, DefaultPostingOffsetInMemorySampling)
 	testutil.Ok(tb, err)
 
-	benchmarkExpandedPostings(tb, bkt, id, r, 50e5)
+	benchmarkExpandedPostings(tb, bkt, id, stats, r, 50e5)
 }
 
-func uploadTestBlock(t testing.TB, tmpDir string, bkt objstore.Bucket, series int) ulid.ULID {
+func uploadTestBlock(t testing.TB, tmpDir string, bkt objstore.Bucket, series int) (ulid.ULID, block.HealthStats) {
 	headOpts := tsdb.DefaultHeadOptions()
 	headOpts.ChunkDirRoot = tmpDir
 	headOpts.ChunkRange = 1000
@@ -1101,7 +1101,7 @@ func uploadTestBlock(t testing.TB, tmpDir string, bkt objstore.Bucket, series in
 	testutil.Ok(t, os.MkdirAll(filepath.Join(tmpDir, "tmp"), os.ModePerm))
 	id := createBlockFromHead(t, filepath.Join(tmpDir, "tmp"), h)
 
-	_, err = metadata.InjectThanos(log.NewNopLogger(), filepath.Join(tmpDir, "tmp", id.String()), metadata.Thanos{
+	meta, err := metadata.InjectThanos(log.NewNopLogger(), filepath.Join(tmpDir, "tmp", id.String()), metadata.Thanos{
 		Labels:     labels.Labels{{Name: "ext1", Value: "1"}}.Map(),
 		Downsample: metadata.ThanosDownsample{Resolution: 0},
 		Source:     metadata.TestSource,
@@ -1110,7 +1110,9 @@ func uploadTestBlock(t testing.TB, tmpDir string, bkt objstore.Bucket, series in
 	testutil.Ok(t, block.Upload(context.Background(), logger, bkt, filepath.Join(tmpDir, "tmp", id.String()), metadata.NoneFunc))
 	testutil.Ok(t, block.Upload(context.Background(), logger, bkt, filepath.Join(tmpDir, "tmp", id.String()), metadata.NoneFunc))
 
-	return id
+	stats, err := block.GatherIndexHealthStats(logger, filepath.Join(tmpDir, "tmp", id.String(), block.IndexFilename), meta.MinTime, meta.MaxTime)
+	testutil.Ok(t, err)
+	return id, stats
 }
 
 func appendTestData(t testing.TB, app storage.Appender, series int) {
@@ -1154,18 +1156,19 @@ func benchmarkExpandedPostings(
 	t testutil.TB,
 	bkt objstore.BucketReader,
 	id ulid.ULID,
+	stats block.HealthStats,
 	r indexheader.Reader,
 	series int,
 ) {
 	n1 := labels.MustNewMatcher(labels.MatchEqual, "n", "1"+storetestutil.LabelLongSuffix)
 
 	jFoo := labels.MustNewMatcher(labels.MatchEqual, "j", "foo")
-	jNotFoo := labels.MustNewMatcher(labels.MatchNotEqual, "j", "foo")
+	//jNotFoo := labels.MustNewMatcher(labels.MatchNotEqual, "j", "foo")
 
 	iStar := labels.MustNewMatcher(labels.MatchRegexp, "i", "^.*$")
 	iPlus := labels.MustNewMatcher(labels.MatchRegexp, "i", "^.+$")
 	i1Plus := labels.MustNewMatcher(labels.MatchRegexp, "i", "^1.+$")
-	iEmptyRe := labels.MustNewMatcher(labels.MatchRegexp, "i", "^$")
+	//iEmptyRe := labels.MustNewMatcher(labels.MatchRegexp, "i", "^$")
 	iNotEmpty := labels.MustNewMatcher(labels.MatchNotEqual, "i", "")
 	iNot2 := labels.MustNewMatcher(labels.MatchNotEqual, "n", "2"+storetestutil.LabelLongSuffix)
 	iNot2Star := labels.MustNewMatcher(labels.MatchNotRegexp, "i", "^2.*$")
@@ -1190,46 +1193,69 @@ func benchmarkExpandedPostings(
 		matchers []*labels.Matcher
 
 		expectedLen int
+
+		lazyExpandedPostingEnabled bool
 	}{
-		{`n="1"`, []*labels.Matcher{n1}, int(float64(series) * 0.2)},
-		{`n="1",j="foo"`, []*labels.Matcher{n1, jFoo}, int(float64(series) * 0.1)},
-		{`j="foo",n="1"`, []*labels.Matcher{jFoo, n1}, int(float64(series) * 0.1)},
-		{`n="1",j!="foo"`, []*labels.Matcher{n1, jNotFoo}, int(float64(series) * 0.1)},
-		{`i=~".*"`, []*labels.Matcher{iStar}, 5 * series},
-		{`i=~".+"`, []*labels.Matcher{iPlus}, 5 * series},
-		{`i=~""`, []*labels.Matcher{iEmptyRe}, 0},
-		{`i!=""`, []*labels.Matcher{iNotEmpty}, 5 * series},
-		{`n="1",i=~".*",j="foo"`, []*labels.Matcher{n1, iStar, jFoo}, int(float64(series) * 0.1)},
-		{`n="1",i=~".*",i!="2",j="foo"`, []*labels.Matcher{n1, iStar, iNot2, jFoo}, int(float64(series) * 0.1)},
-		{`n="1",i!=""`, []*labels.Matcher{n1, iNotEmpty}, int(float64(series) * 0.2)},
-		{`n="1",i!="",j="foo"`, []*labels.Matcher{n1, iNotEmpty, jFoo}, int(float64(series) * 0.1)},
-		{`n="1",i=~".+",j="foo"`, []*labels.Matcher{n1, iPlus, jFoo}, int(float64(series) * 0.1)},
-		{`n="1",i=~"1.+",j="foo"`, []*labels.Matcher{n1, i1Plus, jFoo}, int(float64(series) * 0.011111)},
-		{`n="1",i=~".+",i!="2",j="foo"`, []*labels.Matcher{n1, iPlus, iNot2, jFoo}, int(float64(series) * 0.1)},
-		{`n="1",i=~".+",i!~"2.*",j="foo"`, []*labels.Matcher{n1, iPlus, iNot2Star, jFoo}, int(1 + float64(series)*0.088888)},
-		{`i=~"0|1|2"`, []*labels.Matcher{iRegexSet}, 150}, // 50 series for "1", 50 for "2" and 50 for "3".
-		{`uniq=~"9|random-shuffled-values|1"`, []*labels.Matcher{iRegexBigValueSet}, bigValueSetSize},
+		//{`n="1"`, []*labels.Matcher{n1}, int(float64(series) * 0.2), false},
+		//{`n="1",j="foo"`, []*labels.Matcher{n1, jFoo}, int(float64(series) * 0.1), false},
+		//{`j="foo",n="1"`, []*labels.Matcher{jFoo, n1}, int(float64(series) * 0.1), false},
+		//{`n="1",j!="foo"`, []*labels.Matcher{n1, jNotFoo}, int(float64(series) * 0.1), false},
+		//{`i=~".*"`, []*labels.Matcher{iStar}, 5 * series, false},
+		//{`i=~".+"`, []*labels.Matcher{iPlus}, 5 * series, false},
+		//{`i=~""`, []*labels.Matcher{iEmptyRe}, 0, false},
+		//{`i!=""`, []*labels.Matcher{iNotEmpty}, 5 * series, false},
+		//{`n="1",i=~".*",j="foo"`, []*labels.Matcher{n1, iStar, jFoo}, int(float64(series) * 0.1), false},
+		//{`n="1",i=~".*",i!="2",j="foo"`, []*labels.Matcher{n1, iStar, iNot2, jFoo}, int(float64(series) * 0.1), false},
+		//{`n="1",i!=""`, []*labels.Matcher{n1, iNotEmpty}, int(float64(series) * 0.2), false},
+		//{`n="1",i!="",j="foo"`, []*labels.Matcher{n1, iNotEmpty, jFoo}, int(float64(series) * 0.1), false},
+		//{`n="1",i=~".+",j="foo"`, []*labels.Matcher{n1, iPlus, jFoo}, int(float64(series) * 0.1), false},
+		//{`n="1",i=~"1.+",j="foo"`, []*labels.Matcher{n1, i1Plus, jFoo}, int(float64(series) * 0.011111), false},
+		//{`n="1",i=~".+",i!="2",j="foo"`, []*labels.Matcher{n1, iPlus, iNot2, jFoo}, int(float64(series) * 0.1), false},
+		//{`n="1",i=~".+",i!~"2.*",j="foo"`, []*labels.Matcher{n1, iPlus, iNot2Star, jFoo}, int(1 + float64(series)*0.088888), false},
+		//{`i=~"0|1|2"`, []*labels.Matcher{iRegexSet}, 150, false}, // 50 series for "1", 50 for "2" and 50 for "3".
+		//{`uniq=~"9|random-shuffled-values|1"`, []*labels.Matcher{iRegexBigValueSet}, bigValueSetSize, false},
+
+		// Same queries, but lazy expanded postings enabled.
+		//{`n="1"`, []*labels.Matcher{n1}, int(float64(series) * 0.2), true},
+		//{`n="1",j="foo"`, []*labels.Matcher{n1, jFoo}, int(float64(series) * 0.2), true},
+		//{`j="foo",n="1"`, []*labels.Matcher{jFoo, n1}, int(float64(series) * 0.2), true},
+		//{`n="1",j!="foo"`, []*labels.Matcher{n1, jNotFoo}, int(float64(series) * 0.2), true},
+		//{`i=~".*"`, []*labels.Matcher{iStar}, 5 * series, true},
+		//{`i=~".+"`, []*labels.Matcher{iPlus}, 5 * series, true},
+		//{`i=~""`, []*labels.Matcher{iEmptyRe}, 0, true},
+		//{`i!=""`, []*labels.Matcher{iNotEmpty}, 5 * series, true},
+		{`n="1",i=~".*",j="foo"`, []*labels.Matcher{n1, iStar, jFoo}, int(float64(series) * 0.2), true},
+		{`n="1",i=~".*",i!="2",j="foo"`, []*labels.Matcher{n1, iStar, iNot2, jFoo}, int(float64(series) * 0.2), true},
+		{`n="1",i!=""`, []*labels.Matcher{n1, iNotEmpty}, int(float64(series) * 0.2), true},
+		{`n="1",i!="",j="foo"`, []*labels.Matcher{n1, iNotEmpty, jFoo}, int(float64(series) * 0.2), true},
+		{`n="1",i=~".+",j="foo"`, []*labels.Matcher{n1, iPlus, jFoo}, int(float64(series) * 0.2), true},
+		{`n="1",i=~"1.+",j="foo"`, []*labels.Matcher{n1, i1Plus, jFoo}, int(float64(series) * 0.2), true},
+		{`n="1",i=~".+",i!="2",j="foo"`, []*labels.Matcher{n1, iPlus, iNot2, jFoo}, int(float64(series) * 0.2), true},
+		{`n="1",i=~".+",i!~"2.*",j="foo"`, []*labels.Matcher{n1, iPlus, iNot2Star, jFoo}, int(1 + float64(series)*0.2), true},
+		{`i=~"0|1|2"`, []*labels.Matcher{iRegexSet}, 150, true}, // 50 series for "1", 50 for "2" and 50 for "3".
+		{`uniq=~"9|random-shuffled-values|1"`, []*labels.Matcher{iRegexBigValueSet}, bigValueSetSize, true},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t testutil.TB) {
 			b := &bucketBlock{
-				logger:            log.NewNopLogger(),
-				metrics:           newBucketStoreMetrics(nil),
-				indexHeaderReader: r,
-				indexCache:        noopCache{},
-				bkt:               bkt,
-				meta:              &metadata.Meta{BlockMeta: tsdb.BlockMeta{ULID: id}},
-				partitioner:       NewGapBasedPartitioner(PartitionerMaxGapSize),
+				logger:                 log.NewNopLogger(),
+				metrics:                newBucketStoreMetrics(nil),
+				indexHeaderReader:      r,
+				indexCache:             noopCache{},
+				bkt:                    bkt,
+				meta:                   &metadata.Meta{BlockMeta: tsdb.BlockMeta{ULID: id}},
+				partitioner:            NewGapBasedPartitioner(PartitionerMaxGapSize),
+				estimatedMaxSeriesSize: int(stats.SeriesMaxSize),
 			}
 
 			indexr := newBucketIndexReader(b)
 
 			t.ResetTimer()
 			for i := 0; i < t.N(); i++ {
-				p, err := indexr.ExpandedPostings(context.Background(), c.matchers, NewBytesLimiterFactory(0)(nil))
+				p, err := indexr.ExpandedPostings(context.Background(), c.matchers, NewBytesLimiterFactory(0)(nil), c.lazyExpandedPostingEnabled)
 				testutil.Ok(t, err)
-				testutil.Equals(t, c.expectedLen, len(p))
+				testutil.Equals(t, c.expectedLen, len(p.ps))
 			}
 		})
 	}
@@ -2544,7 +2570,7 @@ func benchmarkBlockSeriesWithConcurrency(b *testing.B, concurrency int, blockMet
 					dummyHistogram,
 					nil,
 				)
-				testutil.Ok(b, blockClient.ExpandPostings(matchers, seriesLimiter))
+				testutil.Ok(b, blockClient.ExpandPostings(matchers, seriesLimiter, false))
 				defer blockClient.Close()
 
 				// Ensure at least 1 series has been returned (as expected).

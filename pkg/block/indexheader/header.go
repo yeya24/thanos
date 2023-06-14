@@ -26,6 +26,8 @@ type Reader interface {
 	// TODO(bwplotka): Move to PostingsOffsets(name string, value ...string) []index.Range and benchmark.
 	PostingsOffset(name string, value string) (index.Range, error)
 
+	PostingsOffsets(name string, value ...string) ([]index.Range, error)
+
 	// LookupSymbol returns string based on given reference.
 	// Error is return if the symbol can't be found.
 	LookupSymbol(o uint32) (string, error)

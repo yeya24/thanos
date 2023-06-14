@@ -895,7 +895,7 @@ type blockSeriesClient struct {
 
 	// Internal state.
 	i               uint64
-	postings        []storage.SeriesRef
+	lazyPostings    *lazyExpandedPostings
 	chkMetas        []chunks.Meta
 	lset            labels.Labels
 	symbolizedLset  []symbolizedLabel
@@ -967,23 +967,24 @@ func (b *blockSeriesClient) MergeStats(stats *queryStats) *queryStats {
 func (b *blockSeriesClient) ExpandPostings(
 	matchers []*labels.Matcher,
 	seriesLimiter SeriesLimiter,
+	lazyExpandedPostingEnabled bool,
 ) error {
-	ps, err := b.indexr.ExpandedPostings(b.ctx, matchers, b.bytesLimiter)
+	ps, err := b.indexr.ExpandedPostings(b.ctx, matchers, b.bytesLimiter, lazyExpandedPostingEnabled)
 	if err != nil {
 		return errors.Wrap(err, "expanded matching posting")
 	}
 
-	if len(ps) == 0 {
+	if len(ps.ps) == 0 {
 		return nil
 	}
 
-	if err := seriesLimiter.Reserve(uint64(len(ps))); err != nil {
+	if err := seriesLimiter.Reserve(uint64(len(ps.ps))); err != nil {
 		return httpgrpc.Errorf(int(codes.ResourceExhausted), "exceeded series limit: %s", err)
 	}
 
-	b.postings = ps
-	if b.batchSize > len(ps) {
-		b.batchSize = len(ps)
+	b.lazyPostings = ps
+	if b.batchSize > len(ps.ps) {
+		b.batchSize = len(ps.ps)
 	}
 	b.entries = make([]seriesEntry, 0, b.batchSize)
 	return nil
@@ -1015,12 +1016,12 @@ func (b *blockSeriesClient) Recv() (*storepb.SeriesResponse, error) {
 func (b *blockSeriesClient) nextBatch() error {
 	start := b.i
 	end := start + SeriesBatchSize
-	if end > uint64(len(b.postings)) {
-		end = uint64(len(b.postings))
+	if end > uint64(len(b.lazyPostings.ps)) {
+		end = uint64(len(b.lazyPostings.ps))
 	}
 	b.i = end
 
-	postingsBatch := b.postings[start:end]
+	postingsBatch := b.lazyPostings.ps[start:end]
 	if len(postingsBatch) == 0 {
 		b.hasMorePostings = false
 		return nil
@@ -1052,6 +1053,12 @@ func (b *blockSeriesClient) nextBatch() error {
 			return errors.Wrap(err, "Lookup labels symbols")
 		}
 
+		for _, matcher := range b.lazyPostings.matchers {
+			val := b.lset.Get(matcher.Name)
+			if !matcher.Matches(val) {
+				continue
+			}
+		}
 		completeLabelset := labelpb.ExtendSortedLabels(b.lset, b.extLset)
 		if !b.shardMatcher.MatchesLabels(completeLabelset) {
 			continue
@@ -1325,7 +1332,7 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, srv storepb.Store_Serie
 					"block.resolution": blk.meta.Thanos.Downsample.Resolution,
 				})
 
-				if err := blockClient.ExpandPostings(blockMatchers, seriesLimiter); err != nil {
+				if err := blockClient.ExpandPostings(blockMatchers, seriesLimiter, false); err != nil {
 					span.Finish()
 					return errors.Wrapf(err, "fetch series for block %s", blk.meta.ULID)
 				}
@@ -1579,6 +1586,7 @@ func (s *BucketStore) LabelNames(ctx context.Context, req *storepb.LabelNamesReq
 				if err := blockClient.ExpandPostings(
 					reqSeriesMatchersNoExtLabels,
 					seriesLimiter,
+					false,
 				); err != nil {
 					return err
 				}
@@ -1770,6 +1778,7 @@ func (s *BucketStore) LabelValues(ctx context.Context, req *storepb.LabelValuesR
 				if err := blockClient.ExpandPostings(
 					reqSeriesMatchersNoExtLabels,
 					seriesLimiter,
+					false,
 				); err != nil {
 					return err
 				}
@@ -2163,6 +2172,8 @@ type bucketIndexReader struct {
 
 	mtx          sync.Mutex
 	loadedSeries map[storage.SeriesRef][]byte
+
+	indexVersion int
 }
 
 func newBucketIndexReader(block *bucketBlock) *bucketIndexReader {
@@ -2180,6 +2191,18 @@ func (r *bucketIndexReader) reset() {
 	r.loadedSeries = map[storage.SeriesRef][]byte{}
 }
 
+func (r *bucketIndexReader) IndexVersion() (int, error) {
+	if r.indexVersion != 0 {
+		return r.indexVersion, nil
+	}
+	v, err := r.block.indexHeaderReader.IndexVersion()
+	if err != nil {
+		return 0, err
+	}
+	r.indexVersion = v
+	return v, nil
+}
+
 // ExpandedPostings returns postings in expanded list instead of index.Postings.
 // This is because we need to have them buffered anyway to perform efficient lookup
 // on object storage.
@@ -2189,7 +2212,7 @@ func (r *bucketIndexReader) reset() {
 // Reminder: A posting is a reference (represented as a uint64) to a series reference, which in turn points to the first
 // chunk where the series contains the matching label-value pair for a given block of data. Postings can be fetched by
 // single label name=value.
-func (r *bucketIndexReader) ExpandedPostings(ctx context.Context, ms []*labels.Matcher, bytesLimiter BytesLimiter) ([]storage.SeriesRef, error) {
+func (r *bucketIndexReader) ExpandedPostings(ctx context.Context, ms []*labels.Matcher, bytesLimiter BytesLimiter, lazyExpandedPostingEnabled bool) (*lazyExpandedPostings, error) {
 	// Sort matchers to make sure we generate the same cache key.
 	sort.Slice(ms, func(i, j int) bool {
 		if ms[i].Type == ms[j].Type {
@@ -2205,7 +2228,7 @@ func (r *bucketIndexReader) ExpandedPostings(ctx context.Context, ms []*labels.M
 		return nil, err
 	}
 	if hit {
-		return postings, nil
+		return newLazyExpandedPostings(postings), nil
 	}
 	var (
 		postingGroups []*postingGroup
@@ -2232,96 +2255,68 @@ func (r *bucketIndexReader) ExpandedPostings(ctx context.Context, ms []*labels.M
 			return nil, nil
 		}
 
-		postingGroups = append(postingGroups, pg)
 		allRequested = allRequested || pg.addAll
 		hasAdds = hasAdds || len(pg.addKeys) > 0
+		if len(pg.addKeys) == 0 && len(pg.removeKeys) == 0 {
+			continue
+		}
+		postingGroups = append(postingGroups, pg)
 
 		// Postings returned by fetchPostings will be in the same order as keys
 		// so it's important that we iterate them in the same order later.
 		// We don't have any other way of pairing keys and fetched postings.
-		keys = append(keys, pg.addKeys...)
-		keys = append(keys, pg.removeKeys...)
+		for _, key := range pg.addKeys {
+			keys = append(keys, labels.Label{Name: pg.matcher.Name, Value: key})
+		}
+		for _, key := range pg.removeKeys {
+			keys = append(keys, labels.Label{Name: pg.matcher.Name, Value: key})
+		}
 	}
 
 	if len(postingGroups) == 0 {
 		return nil, nil
 	}
 
+	addAllPostings := allRequested && !hasAdds
 	// We only need special All postings if there are no other adds. If there are, we can skip fetching
 	// special All postings completely.
-	if allRequested && !hasAdds {
+	if addAllPostings {
 		// add group with label to fetch "special All postings".
 		name, value := index.AllPostingsKey()
 		allPostingsLabel := labels.Label{Name: name, Value: value}
 
-		postingGroups = append(postingGroups, newPostingGroup(true, []labels.Label{allPostingsLabel}, nil))
+		postingGroups = append(postingGroups, newPostingGroup(true, labels.MustNewMatcher(labels.MatchEqual, name, value), []string{value}, nil))
 		keys = append(keys, allPostingsLabel)
 	}
 
-	fetchedPostings, closeFns, err := r.fetchPostings(ctx, keys, bytesLimiter)
-	defer func() {
-		for _, closeFn := range closeFns {
-			closeFn()
-		}
-	}()
+	ps, err := fetchLazyExpandedPostings(ctx, keys, postingGroups, r, bytesLimiter, addAllPostings, lazyExpandedPostingEnabled)
 	if err != nil {
-		return nil, errors.Wrap(err, "get postings")
+		return nil, errors.Wrap(err, "fetch and expand postings")
 	}
 
-	// Get "add" and "remove" postings from groups. We iterate over postingGroups and their keys
-	// again, and this is exactly the same order as before (when building the groups), so we can simply
-	// use one incrementing index to fetch postings from returned slice.
-	postingIndex := 0
-
-	var groupAdds, groupRemovals []index.Postings
-	for _, g := range postingGroups {
-		// We cannot add empty set to groupAdds, since they are intersected.
-		if len(g.addKeys) > 0 {
-			toMerge := make([]index.Postings, 0, len(g.addKeys))
-			for _, l := range g.addKeys {
-				toMerge = append(toMerge, checkNilPosting(l, fetchedPostings[postingIndex]))
-				postingIndex++
-			}
-
-			groupAdds = append(groupAdds, index.Merge(toMerge...))
-		}
-
-		for _, l := range g.removeKeys {
-			groupRemovals = append(groupRemovals, checkNilPosting(l, fetchedPostings[postingIndex]))
-			postingIndex++
-		}
+	if len(ps.matchers) == 0 {
+		// TODO: we cannot encode and compress postings back until we got the final postings to cache.
+		// Encode postings to cache. We compress and cache postings before adding
+		// 16 bytes padding in order to make compressed size smaller.
+		dataToCache, compressionDuration, compressionErrors, compressedSize := r.encodePostingsToCache(index.NewListPostings(ps.ps), len(ps.ps))
+		r.stats.cachedPostingsCompressions++
+		r.stats.cachedPostingsCompressionErrors += compressionErrors
+		r.stats.CachedPostingsCompressionTimeSum += compressionDuration
+		r.stats.CachedPostingsCompressedSizeSum += units.Base2Bytes(compressedSize)
+		r.stats.CachedPostingsOriginalSizeSum += units.Base2Bytes(len(ps.ps) * 4) // Estimate the posting list size.
+		r.block.indexCache.StoreExpandedPostings(r.block.meta.ULID, ms, dataToCache)
 	}
 
-	result := index.Without(index.Intersect(groupAdds...), index.Merge(groupRemovals...))
-
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	ps, err := index.ExpandPostings(result)
-	if err != nil {
-		return nil, errors.Wrap(err, "expand")
-	}
-
-	// Encode postings to cache. We compress and cache postings before adding
-	// 16 bytes padding in order to make compressed size smaller.
-	dataToCache, compressionDuration, compressionErrors, compressedSize := r.encodePostingsToCache(index.NewListPostings(ps), len(ps))
-	r.stats.cachedPostingsCompressions++
-	r.stats.cachedPostingsCompressionErrors += compressionErrors
-	r.stats.CachedPostingsCompressionTimeSum += compressionDuration
-	r.stats.CachedPostingsCompressedSizeSum += units.Base2Bytes(compressedSize)
-	r.stats.CachedPostingsOriginalSizeSum += units.Base2Bytes(len(ps) * 4) // Estimate the posting list size.
-	r.block.indexCache.StoreExpandedPostings(r.block.meta.ULID, ms, dataToCache)
-
-	if len(ps) > 0 {
+	if len(ps.ps) > 0 {
 		// As of version two all series entries are 16 byte padded. All references
 		// we get have to account for that to get the correct offset.
-		version, err := r.block.indexHeaderReader.IndexVersion()
+		version, err := r.IndexVersion()
 		if err != nil {
 			return nil, errors.Wrap(err, "get index version")
 		}
 		if version >= 2 {
-			for i, id := range ps {
-				ps[i] = id * 16
+			for i, id := range ps.ps {
+				ps.ps[i] = id * 16
 			}
 		}
 	}
@@ -2333,23 +2328,26 @@ func (r *bucketIndexReader) ExpandedPostings(ctx context.Context, ms []*labels.M
 // If addAll is not set: Merge of postings for "addKeys" labels minus postings for removeKeys labels
 // This computation happens in ExpandedPostings.
 type postingGroup struct {
-	addAll     bool
-	addKeys    []labels.Label
-	removeKeys []labels.Label
+	addAll      bool
+	matcher     *labels.Matcher
+	addKeys     []string
+	removeKeys  []string
+	cardinality int64
 }
 
-func newPostingGroup(addAll bool, addKeys, removeKeys []labels.Label) *postingGroup {
+func newPostingGroup(addAll bool, matcher *labels.Matcher, addKeys, removeKeys []string) *postingGroup {
 	return &postingGroup{
+		matcher:    matcher,
 		addAll:     addAll,
 		addKeys:    addKeys,
 		removeKeys: removeKeys,
 	}
 }
 
-func checkNilPosting(l labels.Label, p index.Postings) index.Postings {
+func checkNilPosting(name, value string, p index.Postings) index.Postings {
 	if p == nil {
 		// This should not happen. Debug for https://github.com/thanos-io/thanos/issues/874.
-		return index.ErrPostings(errors.Errorf("postings is nil for %s. It was never fetched.", l))
+		return index.ErrPostings(errors.Errorf("postings is nil for {%s=%s}. It was never fetched.", name, value))
 	}
 	return p
 }
@@ -2358,7 +2356,8 @@ func checkNilPosting(l labels.Label, p index.Postings) index.Postings {
 func toPostingGroup(ctx context.Context, lvalsFn func(name string) ([]string, error), m *labels.Matcher) (*postingGroup, error) {
 	if m.Type == labels.MatchRegexp {
 		if vals := findSetMatches(m.Value); len(vals) > 0 {
-			return newPostingGroup(false, labelsFromSetMatchers(m.Name, vals), nil), nil
+			sort.Strings(vals)
+			return newPostingGroup(false, m, vals, nil), nil
 		}
 	}
 
@@ -2366,22 +2365,22 @@ func toPostingGroup(ctx context.Context, lvalsFn func(name string) ([]string, er
 	// have the label name set too. See: https://github.com/prometheus/prometheus/issues/3575
 	// and https://github.com/prometheus/prometheus/pull/3578#issuecomment-351653555.
 	if m.Matches("") {
-		var toRemove []labels.Label
+		var toRemove []string
 
 		// Fast-path for MatchNotRegexp matching.
 		// Inverse of a MatchNotRegexp is MatchRegexp (double negation).
 		// Fast-path for set matching.
 		if m.Type == labels.MatchNotRegexp {
 			if vals := findSetMatches(m.Value); len(vals) > 0 {
-				toRemove = labelsFromSetMatchers(m.Name, vals)
-				return newPostingGroup(true, nil, toRemove), nil
+				sort.Strings(vals)
+				return newPostingGroup(true, m, nil, vals), nil
 			}
 		}
 
 		// Fast-path for MatchNotEqual matching.
 		// Inverse of a MatchNotEqual is MatchEqual (double negation).
 		if m.Type == labels.MatchNotEqual {
-			return newPostingGroup(true, nil, []labels.Label{{Name: m.Name, Value: m.Value}}), nil
+			return newPostingGroup(true, m, nil, []string{m.Value}), nil
 		}
 
 		vals, err := lvalsFn(m.Name)
@@ -2394,16 +2393,16 @@ func toPostingGroup(ctx context.Context, lvalsFn func(name string) ([]string, er
 				return nil, ctx.Err()
 			}
 			if !m.Matches(val) {
-				toRemove = append(toRemove, labels.Label{Name: m.Name, Value: val})
+				toRemove = append(toRemove, val)
 			}
 		}
 
-		return newPostingGroup(true, nil, toRemove), nil
+		return newPostingGroup(true, m, nil, toRemove), nil
 	}
 
 	// Fast-path for equal matching.
 	if m.Type == labels.MatchEqual {
-		return newPostingGroup(false, []labels.Label{{Name: m.Name, Value: m.Value}}, nil), nil
+		return newPostingGroup(false, m, []string{m.Value}, nil), nil
 	}
 
 	vals, err := lvalsFn(m.Name)
@@ -2411,29 +2410,17 @@ func toPostingGroup(ctx context.Context, lvalsFn func(name string) ([]string, er
 		return nil, err
 	}
 
-	var toAdd []labels.Label
+	var toAdd []string
 	for _, val := range vals {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		if m.Matches(val) {
-			toAdd = append(toAdd, labels.Label{Name: m.Name, Value: val})
+			toAdd = append(toAdd, val)
 		}
 	}
 
-	return newPostingGroup(false, toAdd, nil), nil
-}
-
-func labelsFromSetMatchers(name string, vals []string) []labels.Label {
-	// Sorting will improve the performance dramatically if the dataset is relatively large
-	// since entries in the postings offset table was sorted by label name and value,
-	// the sequential reading is much faster.
-	sort.Strings(vals)
-	toAdd := make([]labels.Label, 0, len(vals))
-	for _, val := range vals {
-		toAdd = append(toAdd, labels.Label{Name: name, Value: val})
-	}
-	return toAdd
+	return newPostingGroup(false, m, toAdd, nil), nil
 }
 
 type postingPtr struct {

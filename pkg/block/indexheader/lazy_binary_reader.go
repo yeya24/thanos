@@ -167,6 +167,18 @@ func (r *LazyBinaryReader) PostingsOffset(name, value string) (index.Range, erro
 	return r.reader.PostingsOffset(name, value)
 }
 
+func (r *LazyBinaryReader) PostingsOffsets(name string, values ...string) ([]index.Range, error) {
+	r.readerMx.RLock()
+	defer r.readerMx.RUnlock()
+
+	if err := r.load(); err != nil {
+		return nil, err
+	}
+
+	r.usedAt.Store(time.Now().UnixNano())
+	return r.reader.PostingsOffsets(name, values...)
+}
+
 // LookupSymbol implements Reader.
 func (r *LazyBinaryReader) LookupSymbol(o uint32) (string, error) {
 	r.readerMx.RLock()
