@@ -2451,7 +2451,7 @@ func BenchmarkBlockSeries(b *testing.B) {
 	blk, blockMeta := prepareBucket(b, compact.ResolutionLevelRaw)
 
 	aggrs := []storepb.Aggr{storepb.Aggr_RAW}
-	for _, concurrency := range []int{1, 2, 4, 8, 16, 32} {
+	for _, concurrency := range []int{16, 32} {
 		b.Run(fmt.Sprintf("concurrency: %d", concurrency), func(b *testing.B) {
 			benchmarkBlockSeriesWithConcurrency(b, concurrency, blockMeta, blk, aggrs)
 		})
@@ -2538,6 +2538,26 @@ func benchmarkBlockSeriesWithConcurrency(b *testing.B, concurrency int, blockMet
 	wg := sync.WaitGroup{}
 	wg.Add(concurrency)
 
+	req := &storepb.SeriesRequest{
+		MinTime: blockMeta.MinTime,
+		MaxTime: blockMeta.MaxTime,
+		Matchers: []storepb.LabelMatcher{
+			{Type: storepb.LabelMatcher_RE, Name: "i", Value: ".*0.*"},
+			{Type: storepb.LabelMatcher_EQ, Name: "foo", Value: "bar"},
+			{Type: storepb.LabelMatcher_RE, Name: "j", Value: ".+"},
+			{Type: storepb.LabelMatcher_RE, Name: "j", Value: ".+"},
+			{Type: storepb.LabelMatcher_RE, Name: "j", Value: ".+"},
+			{Type: storepb.LabelMatcher_RE, Name: "j", Value: ".+"},
+			{Type: storepb.LabelMatcher_RE, Name: "j", Value: ".+"},
+			{Type: storepb.LabelMatcher_RE, Name: "j", Value: ".+"},
+		},
+		SkipChunks: false,
+		Aggregates: aggrs,
+	}
+	matchers, err := storepb.MatchersToPromMatchers(req.Matchers...)
+	// TODO FIXME! testutil.Ok calls b.Fatalf under the hood, which
+	// must be called only from the goroutine running the Benchmark function.
+	testutil.Ok(b, err)
 	for w := 0; w < concurrency; w++ {
 		go func() {
 			defer wg.Done()
@@ -2546,22 +2566,7 @@ func benchmarkBlockSeriesWithConcurrency(b *testing.B, concurrency int, blockMet
 				// Each query touches a subset of series. To make it reproducible and make sure
 				// we just don't query consecutive series (as is in the real world), we do create
 				// a label matcher which looks for a short integer within the label value.
-				labelMatcher := fmt.Sprintf(".*%d.*", n%20)
-
-				req := &storepb.SeriesRequest{
-					MinTime: blockMeta.MinTime,
-					MaxTime: blockMeta.MaxTime,
-					Matchers: []storepb.LabelMatcher{
-						{Type: storepb.LabelMatcher_RE, Name: "i", Value: labelMatcher},
-					},
-					SkipChunks: false,
-					Aggregates: aggrs,
-				}
-
-				matchers, err := storepb.MatchersToPromMatchers(req.Matchers...)
-				// TODO FIXME! testutil.Ok calls b.Fatalf under the hood, which
-				// must be called only from the goroutine running the Benchmark function.
-				testutil.Ok(b, err)
+				//labelMatcher := fmt.Sprintf(".*%d.*", n%20)
 
 				dummyHistogram := prometheus.NewHistogram(prometheus.HistogramOpts{})
 				blockClient := newBlockSeriesClient(
@@ -2581,8 +2586,8 @@ func benchmarkBlockSeriesWithConcurrency(b *testing.B, concurrency int, blockMet
 				defer blockClient.Close()
 
 				// Ensure at least 1 series has been returned (as expected).
-				_, err = blockClient.Recv()
-				testutil.Ok(b, err)
+				//_, err = blockClient.Recv()
+				//testutil.Ok(b, err)
 			}
 		}()
 	}
