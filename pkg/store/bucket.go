@@ -319,6 +319,7 @@ type BucketStore struct {
 	fetcher         block.MetadataFetcher
 	dir             string
 	indexCache      storecache.IndexCache
+	chunkCache      storecache.ChunkCache
 	indexReaderPool *indexheader.ReaderPool
 	buffers         sync.Pool
 	chunkPool       pool.Bytes
@@ -387,6 +388,11 @@ func (noopCache) FetchMultiSeries(_ context.Context, _ ulid.ULID, ids []storage.
 	return map[storage.SeriesRef][]byte{}, ids
 }
 
+func (noopCache) StoreChunks(blockID ulid.ULID, refs []uint64, values [][]byte) {}
+func (noopCache) FetchChunks(ctx context.Context, blockID ulid.ULID, refs []uint64) (hits map[uint64][]byte, misses []uint64) {
+	return
+}
+
 // BucketStoreOption are functions that configure BucketStore.
 type BucketStoreOption func(s *BucketStore)
 
@@ -408,6 +414,13 @@ func WithRegistry(reg prometheus.Registerer) BucketStoreOption {
 func WithIndexCache(cache storecache.IndexCache) BucketStoreOption {
 	return func(s *BucketStore) {
 		s.indexCache = cache
+	}
+}
+
+// WithChunkCache sets a indexCache to use instead of a noopCache.
+func WithChunkCache(cache storecache.ChunkCache) BucketStoreOption {
+	return func(s *BucketStore) {
+		s.chunkCache = cache
 	}
 }
 
@@ -487,6 +500,7 @@ func NewBucketStore(
 		fetcher:    fetcher,
 		dir:        dir,
 		indexCache: noopCache{},
+		chunkCache: noopCache{},
 		buffers: sync.Pool{New: func() interface{} {
 			b := make([]byte, 0, initialBufSize)
 			return &b
@@ -707,6 +721,7 @@ func (s *BucketStore) addBlock(ctx context.Context, meta *metadata.Meta) (err er
 		s.bkt,
 		dir,
 		s.indexCache,
+		s.chunkCache,
 		s.chunkPool,
 		indexHeaderReader,
 		s.partitioner,
@@ -2010,6 +2025,7 @@ type bucketBlock struct {
 	meta       *metadata.Meta
 	dir        string
 	indexCache storecache.IndexCache
+	chunkCache storecache.ChunkCache
 	chunkPool  pool.Bytes
 	extLset    labels.Labels
 
@@ -2037,6 +2053,7 @@ func newBucketBlock(
 	bkt objstore.BucketReader,
 	dir string,
 	indexCache storecache.IndexCache,
+	chunkCache storecache.ChunkCache,
 	chunkPool pool.Bytes,
 	indexHeadReader indexheader.Reader,
 	p Partitioner,
@@ -2056,6 +2073,7 @@ func newBucketBlock(
 		metrics:           metrics,
 		bkt:               bkt,
 		indexCache:        indexCache,
+		chunkCache:        chunkCache,
 		chunkPool:         chunkPool,
 		dir:               dir,
 		partitioner:       p,
@@ -3197,32 +3215,57 @@ func (r *bucketChunkReader) addLoad(id chunks.ChunkRef, seriesEntry, chunk int) 
 // load loads all added chunks and saves resulting aggrs to refs.
 func (r *bucketChunkReader) load(ctx context.Context, res []seriesEntry, aggrs []storepb.Aggr, calculateChunkChecksum bool, bytesLimiter BytesLimiter) error {
 	g, ctx := errgroup.WithContext(ctx)
-
+	refs := make([]uint64, 0)
+	m := make(map[uint64]loadIdx)
 	for seq, pIdxs := range r.toLoad {
-		sort.Slice(pIdxs, func(i, j int) bool {
-			return pIdxs[i].offset < pIdxs[j].offset
-		})
-		parts := r.block.partitioner.Partition(len(pIdxs), func(i int) (start, end uint64) {
-			return uint64(pIdxs[i].offset), uint64(pIdxs[i].offset) + uint64(r.block.estimatedMaxChunkSize)
-		})
-
-		for _, p := range parts {
-			if err := bytesLimiter.Reserve(uint64(p.End - p.Start)); err != nil {
-				return httpgrpc.Errorf(int(codes.ResourceExhausted), "exceeded bytes limit while fetching chunks: %s", err)
-			}
-			r.stats.DataDownloadedSizeSum += units.Base2Bytes(p.End - p.Start)
-		}
-
-		for _, p := range parts {
-			seq := seq
-			p := p
-			indices := pIdxs[p.ElemRng[0]:p.ElemRng[1]]
-			g.Go(func() error {
-				return r.loadChunks(ctx, res, aggrs, seq, p, indices, calculateChunkChecksum, bytesLimiter)
-			})
+		for _, idx := range pIdxs {
+			ref := chunks.NewBlockChunkRef(uint64(seq), uint64(idx.offset))
+			refs = append(refs, uint64(ref))
+			m[uint64(ref)] = idx
 		}
 	}
-	return g.Wait()
+	hits, missed := r.block.chunkCache.FetchChunks(ctx, r.block.meta.ULID, refs)
+	for ref, data := range hits {
+		idx := m[ref]
+		if err := populateChunk(&(res[idx.seriesEntry].chks[idx.chunk]), rawChunk(data), aggrs, r.save, calculateChunkChecksum); err != nil {
+			return errors.Wrap(err, "populate chunk")
+		}
+	}
+
+	if len(missed) > 0 {
+		toLoad := make([][]loadIdx, len(r.block.chunkObjs))
+		for _, miss := range missed {
+			idx := m[miss]
+			seq, _ := chunks.BlockChunkRef(miss).Unpack()
+			toLoad[seq] = append(toLoad[seq], idx)
+		}
+		for seq, pIdxs := range r.toLoad {
+			sort.Slice(pIdxs, func(i, j int) bool {
+				return pIdxs[i].offset < pIdxs[j].offset
+			})
+			parts := r.block.partitioner.Partition(len(pIdxs), func(i int) (start, end uint64) {
+				return uint64(pIdxs[i].offset), uint64(pIdxs[i].offset) + uint64(r.block.estimatedMaxChunkSize)
+			})
+
+			for _, p := range parts {
+				if err := bytesLimiter.Reserve(uint64(p.End - p.Start)); err != nil {
+					return httpgrpc.Errorf(int(codes.ResourceExhausted), "exceeded bytes limit while fetching chunks: %s", err)
+				}
+				r.stats.DataDownloadedSizeSum += units.Base2Bytes(p.End - p.Start)
+			}
+
+			for _, p := range parts {
+				seq := seq
+				p := p
+				indices := pIdxs[p.ElemRng[0]:p.ElemRng[1]]
+				g.Go(func() error {
+					return r.loadChunks(ctx, res, aggrs, seq, p, indices, calculateChunkChecksum, bytesLimiter)
+				})
+			}
+		}
+		return g.Wait()
+	}
+	return nil
 }
 
 // loadChunks will read range [start, end] from the segment file with sequence number seq.

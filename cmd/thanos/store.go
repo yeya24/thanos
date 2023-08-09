@@ -333,6 +333,10 @@ func runStore(
 	if err != nil {
 		return errors.Wrap(err, "create index cache")
 	}
+	chunkCache, err := storecache.NewBadgerChunkCache("/Users/benye/badger")
+	if err != nil {
+		return errors.Wrap(err, "create chunk cache")
+	}
 
 	ignoreDeletionMarkFilter := block.NewIgnoreDeletionMarkFilter(logger, insBkt, time.Duration(conf.ignoreDeletionMarksDelay), conf.blockMetaFetchConcurrency)
 	metaFetcher, err := block.NewMetaFetcher(logger, conf.blockMetaFetchConcurrency, insBkt, dataDir, extprom.WrapRegistererWithPrefix("thanos_", reg),
@@ -363,6 +367,7 @@ func runStore(
 		store.WithLogger(logger),
 		store.WithRegistry(reg),
 		store.WithIndexCache(indexCache),
+		store.WithChunkCache(chunkCache),
 		store.WithQueryGate(queriesGate),
 		store.WithChunkPool(chunkPool),
 		store.WithFilterConfig(conf.filterConf),
