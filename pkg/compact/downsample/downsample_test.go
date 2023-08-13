@@ -447,7 +447,7 @@ func TestDownsample(t *testing.T) {
 				fakeMeta.Thanos.Downsample.Resolution = tcase.resolution - 1
 			}
 
-			id, err := Downsample(logger, fakeMeta, mb, dir, tcase.resolution)
+			id, err := downsample(logger, fakeMeta, mb, dir, tcase.resolution)
 			if tcase.expectedDownsamplingErr != nil {
 				testutil.NotOk(t, err)
 				testutil.Equals(t, tcase.expectedDownsamplingErr(ser.chunks).Error(), err.Error())
@@ -532,7 +532,7 @@ func TestDownsampleAggrAndEmptyXORChunks(t *testing.T) {
 
 	fakeMeta := &metadata.Meta{}
 	fakeMeta.Thanos.Downsample.Resolution = 300_000
-	id, err := Downsample(logger, fakeMeta, mb, dir, 3_600_000)
+	id, err := downsample(logger, fakeMeta, mb, dir, 3_600_000)
 	_ = id
 	testutil.Ok(t, err)
 }
@@ -566,7 +566,7 @@ func TestDownsampleAggrAndNonEmptyXORChunks(t *testing.T) {
 
 	fakeMeta := &metadata.Meta{}
 	fakeMeta.Thanos.Downsample.Resolution = 300_000
-	id, err := Downsample(logger, fakeMeta, mb, dir, 3_600_000)
+	id, err := downsample(logger, fakeMeta, mb, dir, 3_600_000)
 	_ = id
 	testutil.Ok(t, err)
 

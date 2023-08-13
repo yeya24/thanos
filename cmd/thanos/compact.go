@@ -175,7 +175,7 @@ func runCompact(
 ) (rerr error) {
 	deleteDelay := time.Duration(conf.deleteDelay)
 	compactMetrics := newCompactMetrics(reg, deleteDelay)
-	downsampleMetrics := newDownsampleMetrics(reg)
+	downsampleMetrics := downsample.NewDownsampleMetrics(reg)
 
 	httpProbe := prober.NewHTTP()
 	statusProber := prober.Combine(
@@ -438,10 +438,10 @@ func runCompact(
 
 			for _, meta := range sy.Metas() {
 				groupKey := meta.Thanos.GroupKey()
-				downsampleMetrics.downsamples.WithLabelValues(groupKey)
-				downsampleMetrics.downsampleFailures.WithLabelValues(groupKey)
+				downsampleMetrics.Downsamples.WithLabelValues(groupKey)
+				downsampleMetrics.DownsampleFailures.WithLabelValues(groupKey)
 			}
-			if err := downsampleBucket(ctx, logger, downsampleMetrics, insBkt, sy.Metas(), downsamplingDir, conf.downsampleConcurrency, conf.blockFilesConcurrency, metadata.HashFunc(conf.hashFunc), conf.acceptMalformedIndex); err != nil {
+			if err := downsample.DownsampleBucket(ctx, logger, downsampleMetrics, insBkt, sy.Metas(), downsamplingDir, conf.downsampleConcurrency, conf.blockFilesConcurrency, metadata.HashFunc(conf.hashFunc), conf.acceptMalformedIndex); err != nil {
 				return errors.Wrap(err, "first pass of downsampling failed")
 			}
 
@@ -449,7 +449,7 @@ func runCompact(
 			if err := sy.SyncMetas(ctx); err != nil {
 				return errors.Wrap(err, "sync before second pass of downsampling")
 			}
-			if err := downsampleBucket(ctx, logger, downsampleMetrics, insBkt, sy.Metas(), downsamplingDir, conf.downsampleConcurrency, conf.blockFilesConcurrency, metadata.HashFunc(conf.hashFunc), conf.acceptMalformedIndex); err != nil {
+			if err := downsample.DownsampleBucket(ctx, logger, downsampleMetrics, insBkt, sy.Metas(), downsamplingDir, conf.downsampleConcurrency, conf.blockFilesConcurrency, metadata.HashFunc(conf.hashFunc), conf.acceptMalformedIndex); err != nil {
 				return errors.Wrap(err, "second pass of downsampling failed")
 			}
 			level.Info(logger).Log("msg", "downsampling iterations done")

@@ -48,8 +48,8 @@ const (
 	ResLevel2DownsampleRange = 10 * 24 * 60 * 60 * 1000 // 10 days.
 )
 
-// Downsample downsamples the given block. It writes a new block into dir and returns its ID.
-func Downsample(
+// downsample downsamples the given block. It writes a new block into dir and returns its ID.
+func downsample(
 	logger log.Logger,
 	origMeta *metadata.Meta,
 	b tsdb.BlockReader,
