@@ -230,9 +230,9 @@ func (s *seriesServer) Context() context.Context {
 	return s.ctx
 }
 
-// aggrsFromFunc infers aggregates of the underlying data based on the wrapping
+// AggrsFromFunc infers aggregates of the underlying data based on the wrapping
 // function of a series selection.
-func aggrsFromFunc(f string) []storepb.Aggr {
+func AggrsFromFunc(f string) []storepb.Aggr {
 	if f == "min" || strings.HasPrefix(f, "min_") {
 		return []storepb.Aggr{storepb.Aggr_MIN}
 	}
@@ -337,7 +337,7 @@ func (q *querier) selectFn(ctx context.Context, hints *storage.SelectHints, ms .
 		return nil, storepb.SeriesStatsCounter{}, errors.Wrap(err, "convert matchers")
 	}
 
-	aggrs := aggrsFromFunc(hints.Func)
+	aggrs := AggrsFromFunc(hints.Func)
 
 	// TODO(bwplotka): Pass it using the SeriesRequest instead of relying on context.
 	ctx = context.WithValue(ctx, store.StoreMatcherKey, q.storeDebugMatchers)
@@ -394,7 +394,7 @@ func (q *querier) selectFn(ctx context.Context, hints *storage.SelectHints, ms .
 		return &promSeriesSet{
 			mint:  q.mint,
 			maxt:  q.maxt,
-			set:   newStoreSeriesSet(resp.seriesSet),
+			set:   NewStoreSeriesSet(resp.seriesSet),
 			aggrs: aggrs,
 			warns: warns,
 		}, resp.seriesSetStats, nil
@@ -406,7 +406,7 @@ func (q *querier) selectFn(ctx context.Context, hints *storage.SelectHints, ms .
 	set := &promSeriesSet{
 		mint:  q.mint,
 		maxt:  q.maxt,
-		set:   dedup.NewOverlapSplit(newStoreSeriesSet(resp.seriesSet)),
+		set:   dedup.NewOverlapSplit(NewStoreSeriesSet(resp.seriesSet)),
 		aggrs: aggrs,
 		warns: warns,
 	}

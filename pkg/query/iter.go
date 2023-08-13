@@ -15,6 +15,10 @@ import (
 	"github.com/thanos-io/thanos/pkg/store/storepb"
 )
 
+func NewPromSeriesSet(set storepb.SeriesSet, mint, maxt int64, aggrs []storepb.Aggr, warns storage.Warnings) storage.SeriesSet {
+	return &promSeriesSet{set: set, mint: mint, maxt: maxt, aggrs: aggrs, warns: warns}
+}
+
 // promSeriesSet implements the SeriesSet interface of the Prometheus storage
 // package on top of our storepb SeriesSet. Overlapping chunks will be naively deduplicated (random selection).
 type promSeriesSet struct {
@@ -54,7 +58,7 @@ type storeSeriesSet struct {
 	i      int
 }
 
-func newStoreSeriesSet(s []storepb.Series) *storeSeriesSet {
+func NewStoreSeriesSet(s []storepb.Series) storepb.SeriesSet {
 	return &storeSeriesSet{series: s, i: -1}
 }
 
