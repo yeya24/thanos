@@ -441,7 +441,7 @@ func runCompact(
 				downsampleMetrics.Downsamples.WithLabelValues(groupKey)
 				downsampleMetrics.DownsampleFailures.WithLabelValues(groupKey)
 			}
-			if err := downsample.DownsampleBucket(ctx, logger, downsampleMetrics, insBkt, sy.Metas(), downsamplingDir, conf.downsampleConcurrency, conf.blockFilesConcurrency, metadata.HashFunc(conf.hashFunc), conf.acceptMalformedIndex); err != nil {
+			if err := downsample.DownsampleBucket(ctx, logger, downsampleMetrics, insBkt, sy.Metas(), downsamplingDir, conf.downsampleConcurrency, conf.blockFilesConcurrency, metadata.HashFunc(conf.hashFunc), conf.acceptMalformedIndex, downsample.ResLevel1DownsampleRange, downsample.ResLevel2DownsampleRange); err != nil {
 				return errors.Wrap(err, "first pass of downsampling failed")
 			}
 
@@ -449,7 +449,7 @@ func runCompact(
 			if err := sy.SyncMetas(ctx); err != nil {
 				return errors.Wrap(err, "sync before second pass of downsampling")
 			}
-			if err := downsample.DownsampleBucket(ctx, logger, downsampleMetrics, insBkt, sy.Metas(), downsamplingDir, conf.downsampleConcurrency, conf.blockFilesConcurrency, metadata.HashFunc(conf.hashFunc), conf.acceptMalformedIndex); err != nil {
+			if err := downsample.DownsampleBucket(ctx, logger, downsampleMetrics, insBkt, sy.Metas(), downsamplingDir, conf.downsampleConcurrency, conf.blockFilesConcurrency, metadata.HashFunc(conf.hashFunc), conf.acceptMalformedIndex, downsample.ResLevel1DownsampleRange, downsample.ResLevel2DownsampleRange); err != nil {
 				return errors.Wrap(err, "second pass of downsampling failed")
 			}
 			level.Info(logger).Log("msg", "downsampling iterations done")

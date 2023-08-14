@@ -61,6 +61,7 @@ func DownsampleBucket(
 	blockFilesConcurrency int,
 	hashFunc metadata.HashFunc,
 	acceptMalformedIndex bool,
+	level1DownsampleRange, level2DownsampleRange int64,
 ) (rerr error) {
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return errors.Wrap(err, "create dir")
@@ -171,7 +172,7 @@ metaSendLoop:
 			// Only downsample blocks once we are sure to get roughly 2 chunks out of it.
 			// NOTE(fabxc): this must match with at which block size the compactor creates downsampled
 			// blocks. Otherwise we may never downsample some data.
-			if m.MaxTime-m.MinTime < ResLevel1DownsampleRange {
+			if m.MaxTime-m.MinTime < level1DownsampleRange {
 				continue
 			}
 
@@ -189,7 +190,7 @@ metaSendLoop:
 			// Only downsample blocks once we are sure to get roughly 2 chunks out of it.
 			// NOTE(fabxc): this must match with at which block size the compactor creates downsampled
 			// blocks. Otherwise we may never downsample some data.
-			if m.MaxTime-m.MinTime < ResLevel2DownsampleRange {
+			if m.MaxTime-m.MinTime < level2DownsampleRange {
 				continue
 			}
 		}

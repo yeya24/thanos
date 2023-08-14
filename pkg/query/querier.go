@@ -394,7 +394,7 @@ func (q *querier) selectFn(ctx context.Context, hints *storage.SelectHints, ms .
 		return &promSeriesSet{
 			mint:  q.mint,
 			maxt:  q.maxt,
-			set:   NewStoreSeriesSet(resp.seriesSet),
+			set:   newStoreSeriesSet(resp.seriesSet),
 			aggrs: aggrs,
 			warns: warns,
 		}, resp.seriesSetStats, nil
@@ -406,7 +406,7 @@ func (q *querier) selectFn(ctx context.Context, hints *storage.SelectHints, ms .
 	set := &promSeriesSet{
 		mint:  q.mint,
 		maxt:  q.maxt,
-		set:   dedup.NewOverlapSplit(NewStoreSeriesSet(resp.seriesSet)),
+		set:   dedup.NewOverlapSplit(newStoreSeriesSet(resp.seriesSet)),
 		aggrs: aggrs,
 		warns: warns,
 	}

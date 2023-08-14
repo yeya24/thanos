@@ -96,7 +96,7 @@ func RunDownsample(
 					metrics.Downsamples.WithLabelValues(groupKey)
 					metrics.DownsampleFailures.WithLabelValues(groupKey)
 				}
-				if err := downsample.DownsampleBucket(ctx, logger, metrics, insBkt, metas, dataDir, downsampleConcurrency, blockFilesConcurrency, hashFunc, false); err != nil {
+				if err := downsample.DownsampleBucket(ctx, logger, metrics, insBkt, metas, dataDir, downsampleConcurrency, blockFilesConcurrency, hashFunc, false, downsample.ResLevel1DownsampleRange, downsample.ResLevel2DownsampleRange); err != nil {
 					return errors.Wrap(err, "downsampling failed")
 				}
 
@@ -105,7 +105,7 @@ func RunDownsample(
 				if err != nil {
 					return errors.Wrap(err, "sync before second pass of downsampling")
 				}
-				if err := downsample.DownsampleBucket(ctx, logger, metrics, insBkt, metas, dataDir, downsampleConcurrency, blockFilesConcurrency, hashFunc, false); err != nil {
+				if err := downsample.DownsampleBucket(ctx, logger, metrics, insBkt, metas, dataDir, downsampleConcurrency, blockFilesConcurrency, hashFunc, false, downsample.ResLevel1DownsampleRange, downsample.ResLevel2DownsampleRange); err != nil {
 					return errors.Wrap(err, "downsampling failed")
 				}
 				return nil
