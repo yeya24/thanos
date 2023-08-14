@@ -30,7 +30,7 @@ type DownsampleMetrics struct {
 	DownsampleDuration *prometheus.HistogramVec
 }
 
-func NewDownsampleMetrics(reg *prometheus.Registry) *DownsampleMetrics {
+func NewDownsampleMetrics(reg prometheus.Registerer) *DownsampleMetrics {
 	m := new(DownsampleMetrics)
 
 	m.Downsamples = promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
