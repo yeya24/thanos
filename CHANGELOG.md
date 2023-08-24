@@ -34,6 +34,7 @@ We use *breaking :warning:* to mark changes that are not backward compatible (re
 ### Removed
 
 - [#6686](https://github.com/thanos-io/thanos/pull/6686) Remove deprecated `--log.request.decision` flag. We now use `--request.logging-config` to set logging decisions.
+- [#6651](https://github.com/thanos-io/thanos/pull/6651) *: Remove Tags Interceptor from Thanos. Tags interceptor is removed from v2.0.0 go-grpc-middleware and is not needed anymore. `request-id` will not be added as a tag in grpc logging when `--request.logging` flag is enabled.
 
 ## [v0.32.4](https://github.com/thanos-io/thanos/tree/release-0.32) - 02.10.2023
 
@@ -98,6 +99,8 @@ We use *breaking :warning:* to mark changes that are not backward compatible (re
 ### Removed
 
 ## [v0.32.0](https://github.com/thanos-io/thanos/tree/release-0.32) - 23.08.2023
+
+## [v0.32.0](https://github.com/thanos-io/thanos/tree/release-0.32) - Release in progress
 
 ### Added
 
