@@ -5,11 +5,11 @@
 
 trap 'kill 0' SIGTERM
 
-MINIO_ENABLED=${MINIO_ENABLED:-"1"}
-MINIO_EXECUTABLE=${MINIO_EXECUTABLE:-"/opt/homebrew/bin/minio"}
-MC_EXECUTABLE=${MC_EXECUTABLE:-"/opt/homebrew/bin/mc"}
-PROMETHEUS_EXECUTABLE=${PROMETHEUS_EXECUTABLE:-"/Users/coquadro/work/prometheus/prometheus"}
-THANOS_EXECUTABLE=${THANOS_EXECUTABLE:-"/Users/coquadro/go/bin/thanos"}
+MINIO_ENABLED=${MINIO_ENABLED:-""}
+MINIO_EXECUTABLE=${MINIO_EXECUTABLE:-"minio"}
+MC_EXECUTABLE=${MC_EXECUTABLE:-"mc"}
+PROMETHEUS_EXECUTABLE=${PROMETHEUS_EXECUTABLE:-"prometheus"}
+THANOS_EXECUTABLE=${THANOS_EXECUTABLE:-"thanos"}
 S3_ENDPOINT=""
 
 if [ ! $(command -v "$PROMETHEUS_EXECUTABLE") ]; then
@@ -41,7 +41,7 @@ if [ -n "${MINIO_ENABLED}" ]; then
   export MINIO_ENDPOINT="127.0.0.1:9000"
   export MINIO_BUCKET="thanos"
   export S3_ACCESS_KEY=${MINIO_ROOT_USER}
-  export S3_SECRET_KEY=${MINIO_ROOT_PASSWORD}
+  export S3_SECRET_KEY=${MINIO_ROOT_USER}
   export S3_BUCKET=${MINIO_BUCKET}
   export S3_ENDPOINT=${MINIO_ENDPOINT}
   export S3_INSECURE="true"
@@ -56,12 +56,6 @@ if [ -n "${MINIO_ENABLED}" ]; then
   ${MC_EXECUTABLE} mb tmp/${MINIO_BUCKET}
   ${MC_EXECUTABLE} config host rm tmp
 
-  #export S3_ACCESS_KEY="AKIA444SU72H7DXOH3UN"
-  #export S3_SECRET_KEY="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"
-  #export S3_BUCKET="thanos-coleen"
-  #export S3_ENDPOINT="s3.eu-central-1.amazonaws.com"
-  #export S3_INSECURE="true"
-  #export S3_V2_SIGNATURE="false"
   cat <<EOF >data/bucket.yml
 type: S3
 config:
@@ -74,81 +68,19 @@ config:
 EOF
 fi
 
-cat <<EOF >data/logging.yml
-grpc:
-  options:
-    level: DEBUG
-    decision:
-      log_start: true
-      log_end: true
-http:
-  options:
-    level: DEBUG
-    decision:
-      log_start: true
-      log_end: true
-
-EOF
-QUERIER_JAEGER_CONFIG=$(
-  cat <<-EOF
-		type: JAEGER
-		config:
-		  service_name: thanos-query
-		  sampler_param: 1
-		  sampler_type: const
-		  reporter_log_spans: true
-		  agent_host: localhost
-		  agent_port: 5775
-	EOF
-)
-SIDECAR_JAEGER_CONFIG=$(
-  cat <<-EOF
-		type: JAEGER
-		config:
-		  service_name: thanos-sidecar
-		  sampler_param: 1
-		  sampler_type: const
-		  reporter_log_spans: true
-      agent_host: localhost
-      agent_port: 5775
-	EOF
-)
-STORE_JAEGER_CONFIG=$(
-  cat <<-EOF
-		type: JAEGER
-		config:
-		  service_name: thanos-store
-		  sampler_param: 1
-		  sampler_type: const
-		  reporter_log_spans: true
-		  agent_host: localhost
-		  agent_port: 5775
-	EOF
-)
 # Setup alert / rules config file.
 cat >data/rules.yml <<-EOF
-groups:
-- name: AGroup
-  interval: 30s
-  rules:
-  - record: good_events:rate_2m
-    expr: some_expression
-  - record: total_events:rate_2m
-    expr: some_expression
-  - record: good_events:rate_1h
-    expr:  sum_over_time(good_events:rate_2m[60m])
-- name: go_recording_rules
-  interval: 30s
-  rules:
-  - record: go_goroutines_total
-    expr: sum(go_goroutines)
-
+	groups:
+	  - name: example
+	    rules:
+	    - record: job:go_threads:sum
+	      expr: sum(go_threads) by (job)
 EOF
 
 STORES=""
 
 # Start three Prometheus servers monitoring themselves.
-for i in $(seq 0 1); do
+for i in $(seq 0 2); do
   rm -rf data/prom"${i}"
   mkdir -p data/prom"${i}"/
 
@@ -214,7 +146,7 @@ if [ -n "${MINIO_ENABLED}" ]; then
 fi
 
 # Start one sidecar for each Prometheus server.
-for i in $(seq 0 1); do
+for i in $(seq 0 2); do
   if [ -z ${CODESPACE_NAME+x} ]; then
     PROMETHEUS_URL="http://localhost:909${i}"
   else
@@ -229,8 +161,6 @@ for i in $(seq 0 1); do
     --http-grace-period 1s \
     --prometheus.url "${PROMETHEUS_URL}" \
     --tsdb.path data/prom"${i}" \
-    --tracing.config="${SIDECAR_JAEGER_CONFIG}" \
-    --request.logging-config-file data/logging.yml \
     ${OBJSTORECFG} &
 
   STORES="${STORES} --store 127.0.0.1:109${i}1"
@@ -263,8 +193,6 @@ metafile_content_ttl: 0s
     --http-grace-period 1s \
     --data-dir data/store \
     --store.caching-bucket.config-file=groupcache.yml \
-    --tracing.config="${STORE_JAEGER_CONFIG}" \
-    --request.logging-config-file data/logging.yml \
     ${OBJSTORECFG} &
 
   STORES="${STORES} --store 127.0.0.1:10905"
@@ -274,7 +202,7 @@ sleep 0.5
 
 if [ -n "${REMOTE_WRITE_ENABLED}" ]; then
 
-  for i in $(seq 0 1); do
+  for i in $(seq 0 1 2); do
     ${THANOS_EXECUTABLE} receive \
       --debug.name receive${i} \
       --log.level debug \
@@ -325,6 +253,16 @@ fi
 
 sleep 0.5
 
+QUERIER_JAEGER_CONFIG=$(
+  cat <<-EOF
+		type: JAEGER
+		config:
+		  service_name: thanos-query
+		  sampler_type: ratelimiting
+		  sampler_param: 2
+	EOF
+)
+
 REMOTE_WRITE_FLAGS=""
 if [ -n "${STATELESS_RULER_ENABLED}" ]; then
   cat >data/rule-remote-write.yaml <<-EOF
@@ -339,15 +277,13 @@ fi
 # Start Thanos Ruler.
 ${THANOS_EXECUTABLE} rule \
   --data-dir data/ \
-  --eval-interval "1m" \
+  --eval-interval "30s" \
   --rule-file "data/rules.yml" \
   --alert.query-url "http://0.0.0.0:9090" \
   --query "http://0.0.0.0:10904" \
   --query "http://0.0.0.0:10914" \
   --http-address="0.0.0.0:19999" \
   --grpc-address="0.0.0.0:19998" \
-  --request.logging-config-file data/logging.yml \
-  --tracing.config="${RULER_JAEGER_CONFIG}" \
   --label 'rule="true"' \
   "${REMOTE_WRITE_FLAGS}" \
   ${OBJSTORECFG} &
@@ -355,7 +291,7 @@ ${THANOS_EXECUTABLE} rule \
 STORES="${STORES} --store 127.0.0.1:19998"
 
 # Start two query nodes.
-for i in $(seq 0); do
+for i in $(seq 0 1); do
   ${THANOS_EXECUTABLE} query \
     --debug.name query-"${i}" \
     --log.level debug \
@@ -365,7 +301,6 @@ for i in $(seq 0); do
     --http-grace-period 1s \
     --query.replica-label prometheus \
     --tracing.config="${QUERIER_JAEGER_CONFIG}" \
-    --request.logging-config-file data/logging.yml \
     --query.replica-label receive_replica \
     ${STORES} &
 done
