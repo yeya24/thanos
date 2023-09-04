@@ -57,7 +57,7 @@ func registerSidecar(app *extkingpin.App) {
 	conf.registerFlag(cmd)
 	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ <-chan struct{}, _ bool) error {
 
-		grpcLogOpts, err := logging.ParsegRPCOptions(conf.reqLogConfig)
+		grpcLogOpts, logFilterMethods, err := logging.ParsegRPCOptions(conf.reqLogConfig)
 
 		if err != nil {
 			return errors.Wrap(err, "error while parsing config for request logging")
@@ -74,7 +74,7 @@ func registerSidecar(app *extkingpin.App) {
 				RetryInterval: conf.reloader.retryInterval,
 			})
 
-		return runSidecar(g, logger, reg, tracer, rl, component.Sidecar, *conf, grpcLogOpts)
+		return runSidecar(g, logger, reg, tracer, rl, component.Sidecar, *conf, grpcLogOpts, logFilterMethods)
 	})
 }
 
@@ -87,6 +87,7 @@ func runSidecar(
 	comp component.Component,
 	conf sidecarConfig,
 	grpcLogOpts []grpc_logging.Option,
+	logFilterMethods []string,
 ) error {
 	httpConfContentYaml, err := conf.prometheus.httpClient.Content()
 	if err != nil {
@@ -287,7 +288,7 @@ func runSidecar(
 		)
 
 		storeServer := store.NewLimitedStoreServer(store.NewInstrumentedStoreServer(reg, promStore), reg, conf.storeRateLimits)
-		s := grpcserver.New(logger, reg, tracer, grpcLogOpts, comp, grpcProbe,
+		s := grpcserver.New(logger, reg, tracer, grpcLogOpts, logFilterMethods, comp, grpcProbe,
 			grpcserver.WithServer(store.RegisterStoreServer(storeServer, logger)),
 			grpcserver.WithServer(rules.RegisterRulesServer(rules.NewPrometheus(conf.prometheus.url, c, m.Labels))),
 			grpcserver.WithServer(targets.RegisterTargetsServer(targets.NewPrometheus(conf.prometheus.url, c, m.Labels))),

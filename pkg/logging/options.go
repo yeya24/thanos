@@ -4,13 +4,18 @@
 package logging
 
 import (
+	"context"
 	"fmt"
 	"time"
+
+	"github.com/opentracing/opentracing-go"
+	"go.opentelemetry.io/otel/trace"
 
 	extflag "github.com/efficientgo/tools/extkingpin"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	grpc_logging "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
+	"github.com/thanos-io/thanos/pkg/tracing/migration"
 	"google.golang.org/grpc/codes"
 )
 
@@ -126,9 +131,9 @@ func DefaultCodeToLevel(logger log.Logger, code int) log.Logger {
 func DefaultCodeToLevelGRPC(c codes.Code) grpc_logging.Level {
 	switch c {
 	case codes.Unknown, codes.Unimplemented, codes.Internal, codes.DataLoss:
-		return grpc_logging.ERROR
+		return grpc_logging.LevelError
 	default:
-		return grpc_logging.DEBUG
+		return grpc_logging.LevelDebug
 	}
 }
 
@@ -157,6 +162,15 @@ var MapAllowedLevels = map[string][]string{
 	"WARN":  {"WARN", "ERROR"},
 }
 
+func GetTraceIDAsField(ctx context.Context) grpc_logging.Fields {
+	span := opentracing.SpanFromContext(ctx)
+	TraceID, _ := migration.GetTraceIDFromBridgeSpan(span)
+	if span := trace.SpanContextFromContext(ctx); span.IsSampled() {
+		return grpc_logging.Fields{"traceID", TraceID}
+	}
+	return nil
+}
+
 // TODO: @yashrsharma44 - To be deprecated in the next release.
 func ParseHTTPOptions(reqLogConfig *extflag.PathOrContent) ([]Option, error) {
 	// Default Option: No Logging.
@@ -174,21 +188,21 @@ func ParseHTTPOptions(reqLogConfig *extflag.PathOrContent) ([]Option, error) {
 }
 
 // TODO: @yashrsharma44 - To be deprecated in the next release.
-func ParsegRPCOptions(reqLogConfig *extflag.PathOrContent) ([]grpc_logging.Option, error) {
+func ParsegRPCOptions(reqLogConfig *extflag.PathOrContent) ([]grpc_logging.Option, []string, error) {
 	// Default Option: No Logging.
-	logOpts := []grpc_logging.Option{grpc_logging.WithDecider(func(_ string, _ error) grpc_logging.Decision {
-		return grpc_logging.NoLogCall
-	})}
-
+	//logOpts := []grpc_logging.Option{grpc_logging.WithDecider(func(_ string, _ error) grpc_logging.Decision {
+	//	return grpc_logging.NoLogCall
+	//})}
+	var logOpts []grpc_logging.Option
 	configYAML, err := reqLogConfig.Content()
 	if err != nil {
-		return logOpts, fmt.Errorf("getting request logging config failed. %v", err)
+		return logOpts, nil, fmt.Errorf("getting request logging config failed. %v", err)
 	}
 
-	logOpts, err = NewGRPCOption(configYAML)
+	logOpts, logFilterMethods, err := NewGRPCOption(configYAML)
 	if err != nil {
-		return logOpts, err
+		return logOpts, logFilterMethods, err
 	}
 
-	return logOpts, nil
+	return logOpts, logFilterMethods, nil
 }
