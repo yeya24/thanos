@@ -59,7 +59,7 @@ func (o *opentracingServerReportable) ServerReporter(ctx context.Context, _ inte
 		return interceptors.NoopReporter{}, ctx
 	}
 
-	newCtx, serverSpan := newServerSpanFromInbound(ctx, o.tracer, o.traceHeaderName, interceptors.FullMethod(service, method))
+	newCtx, serverSpan := newServerSpanFromInbound(ctx, o.tracer, interceptors.FullMethod(service, method))
 	mock := &opentracingServerReporter{ctx: newCtx, typ: typ, service: service, method: method, serverSpan: serverSpan}
 	return mock, newCtx
 }
