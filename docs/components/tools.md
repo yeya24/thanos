@@ -827,6 +827,7 @@ Flags:
                                 Path to YAML file that contains relabel configs
                                 that will be applied to blocks
       --tmp.dir="/tmp/thanos-rewrite"
+                                Working directory for temporary files
       --tracing.config=<content>
                                 Alternative to 'tracing.config-file' flag
                                 (mutually exclusive). Content of YAML file
