@@ -10,7 +10,6 @@ import (
 	"github.com/thanos-io/thanos/pkg/tracing/tracing_middleware"
 	"github.com/thanos-io/thanos/pkg/tracing/tracing_middleware/grpctesting"
 
-	//"github.com/thanos-io/thanos/pkg/tracing"
 	"io"
 	"net/http"
 	"strconv"
