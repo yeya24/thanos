@@ -76,7 +76,7 @@ func StreamServerInterceptor(opts ...Option) grpc.StreamServerInterceptor {
 	return interceptors.StreamServerInterceptor(&opentracingServerReportable{tracer: o.tracer, traceHeaderName: o.traceHeaderName, filterOutFunc: o.filterOutFunc})
 }
 
-func newServerSpanFromInbound(ctx context.Context, tracer opentracing.Tracer, traceHeaderName, fullMethodName string) (context.Context, opentracing.Span) {
+func newServerSpanFromInbound(ctx context.Context, tracer opentracing.Tracer, fullMethodName string) (context.Context, opentracing.Span) {
 	md := metautils.ExtractIncoming(ctx)
 	parentSpanContext, err := tracer.Extract(opentracing.HTTPHeaders, metadataTextMap(md))
 	if err != nil && err != opentracing.ErrSpanContextNotFound {
@@ -90,6 +90,5 @@ func newServerSpanFromInbound(ctx context.Context, tracer opentracing.Tracer, tr
 		grpcTag,
 	)
 
-	//injectOpentracingIdsToTags(traceHeaderName, serverSpan, tags.Extract(ctx))
 	return opentracing.ContextWithSpan(ctx, serverSpan), serverSpan
 }

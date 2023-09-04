@@ -52,7 +52,7 @@ func WithFilterFunc(f FilterFunc) Option {
 }
 
 // WithTraceHeaderName customizes the trace header name where trace metadata passed with requests.
-// Default one is `uber-trace-id`
+// Default one is `uber-trace-id`.
 func WithTraceHeaderName(name string) Option {
 	return func(o *options) {
 		o.traceHeaderName = name
