@@ -12,6 +12,8 @@ We use *breaking :warning:* to mark changes that are not backward compatible (re
 
 ### Fixed
 
+- [#6692](https://github.com/thanos-io/thanos/pull/6692) Store: Fix matching bug when using empty alternative in regex matcher, for example (a||b).
+
 ### Added
 
 - [#6605](https://github.com/thanos-io/thanos/pull/6605) Query Frontend: Support vertical sharding binary expression with metric name when no matching labels specified.
@@ -19,6 +21,24 @@ We use *breaking :warning:* to mark changes that are not backward compatible (re
 ### Changed
 
 - [#6664](https://github.com/thanos-io/thanos/pull/6664) *: Update Prometheus to 2.46.1.
+- [#6698](https://github.com/thanos-io/thanos/pull/6608) Receive: Change write log level from warn to info.
+
+### Removed
+
+- [#6686](https://github.com/thanos-io/thanos/pull/6686) Remove deprecated `--log.request.decision` flag. We now use `--request.logging-config` to set logging decisions.
+
+## [v0.32.2](https://github.com/thanos-io/thanos/tree/release-0.32) - 31.08.2023
+
+### Fixed
+
+- [#6675](https://github.com/thanos-io/thanos/pull/6675) Store: Fix race when iterating blocks
+- [#6679](https://github.com/thanos-io/thanos/pull/6679) Store: Record stats even on ExpandPostings error
+- [#6681](https://github.com/thanos-io/thanos/pull/6681) Store: Fix forgotten field in store stats merge
+- [#6684](https://github.com/thanos-io/thanos/pull/6684) Store: Fix postings reader short reads to address nil postings bug
+
+### Added
+
+### Changed
 
 ### Removed
 
@@ -26,9 +46,9 @@ We use *breaking :warning:* to mark changes that are not backward compatible (re
 
 ### Fixed
 
-- [#6650](https://github.com/thanos-io/thanos/pull/6650) Store: fix error handling in decodePostings
-- [#6654](https://github.com/thanos-io/thanos/pull/6654) Store: fix ignored error in postings
-- [#6655](https://github.com/thanos-io/thanos/pull/6655) Store: fix bufio pool handling
+- [#6650](https://github.com/thanos-io/thanos/pull/6650) Store: Fix error handling in decodePostings
+- [#6654](https://github.com/thanos-io/thanos/pull/6654) Store: Fix ignored error in postings
+- [#6655](https://github.com/thanos-io/thanos/pull/6655) Store: Fix bufio pool handling
 - [#6669](https://github.com/thanos-io/thanos/pull/6669) Store: Fix mutable stringset memory usage
 
 ### Added
