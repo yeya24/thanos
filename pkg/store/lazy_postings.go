@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"github.com/pkg/errors"
@@ -178,7 +179,8 @@ func OptimizePostingsFetchByDownloadedBytes(r indexheader.Reader, postingGroups 
 		if len(rngs) == 0 {
 			return nil, true, nil
 		}
-		for _, r := range rngs {
+		for i, r := range rngs {
+			fmt.Printf("posting range: %d %d %d Value: %s\n", i, r.Start, r.End, vals[i])
 			if r == indexheader.NotFoundRange {
 				continue
 			}

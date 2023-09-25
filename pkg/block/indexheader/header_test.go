@@ -159,6 +159,12 @@ func TestReaders(t *testing.T) {
 					testutil.Assert(t, len(rngs) == 1)
 					testutil.Equals(t, NotFoundRange, rngs[0])
 
+					rngs, err = br.PostingsOffsets("a", "0", "9")
+					testutil.Ok(t, err)
+					testutil.Assert(t, len(rngs) == 2)
+					testutil.Equals(t, NotFoundRange, rngs[0])
+					testutil.Assert(t, rngs[1].End > rngs[1].Start)
+
 					rngs, err = br.PostingsOffsets("a", "0", "10", "99")
 					testutil.Ok(t, err)
 					testutil.Assert(t, len(rngs) == 3)
