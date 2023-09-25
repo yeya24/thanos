@@ -1493,7 +1493,7 @@ func registerBucketOptimize(app extkingpin.AppClause, objStoreConfig *extflag.Pa
 		fmt.Println("output:")
 		lbs, matchers := store.KeysToFetchFromPostingGroups(pgs, true)
 		fmt.Println(labelMatchersToString(matchers))
-		fmt.Println(labels.Labels(lbs).String())
+		fmt.Printf("lazy expanding keys: %s\n", labels.Labels(lbs).String())
 
 		partitioner := store.NewGapBasedPartitioner(512 * 1024)
 		ps, err := fetchAndExpand(ctx, lbs, bkt, ir, partitioner, logger, id, pgs)
@@ -1503,11 +1503,12 @@ func registerBucketOptimize(app extkingpin.AppClause, objStoreConfig *extflag.Pa
 		fmt.Printf("lazy expanded postings length: %d\n", len(ps))
 
 		lbls, _ := store.KeysToFetchFromPostingGroups(pgs, false)
+		fmt.Printf("normal expanding keys: %s\n", labels.Labels(lbls).String())
 		newPs, err := fetchAndExpand(ctx, lbls, bkt, ir, partitioner, logger, id, pgs)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("real expanded postings length: %d\n", len(newPs))
+		fmt.Printf("normal expanded postings length: %d\n", len(newPs))
 		return nil
 	})
 }
