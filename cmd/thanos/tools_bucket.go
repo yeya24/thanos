@@ -1488,6 +1488,11 @@ func registerBucketOptimize(app extkingpin.AppClause, objStoreConfig *extflag.Pa
 			fmt.Printf("name: %s, matchers: %s, lazy: %s, Cardinality: %d, AddAll: %s, AddKeys: %v, RemoveKeys: %v\n", pg.Name, labelMatchersToString(pg.Matchers), strconv.FormatBool(pg.Lazy), pg.Cardinality, strconv.FormatBool(pg.AddAll), pg.AddKeys, pg.RemoveKeys)
 		}
 
+		fmt.Println("output:")
+		lbs, matchers := store.KeysToFetchFromPostingGroups(pgs)
+		fmt.Println(labelMatchersToString(matchers))
+		fmt.Println(labels.Labels(lbs).String())
+
 		return nil
 	})
 }

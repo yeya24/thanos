@@ -314,6 +314,37 @@ func fetchLazyExpandedPostings(
 	return &lazyExpandedPostings{postings: ps, matchers: matchers}, nil
 }
 
+func KeysToFetchFromPostingGroups(postingGroups []*PostingGroup) ([]labels.Label, []*labels.Matcher) {
+	var lazyMatchers []*labels.Matcher
+	keys := make([]labels.Label, 0)
+	i := 0
+	for i < len(postingGroups) {
+		pg := postingGroups[i]
+		if pg.Lazy {
+			break
+		}
+
+		// Postings returned by fetchPostings will be in the same order as keys
+		// so it's important that we iterate them in the same order later.
+		// We don't have any other way of pairing keys and fetched postings.
+		for _, key := range pg.AddKeys {
+			keys = append(keys, labels.Label{Name: pg.Name, Value: key})
+		}
+		for _, key := range pg.RemoveKeys {
+			keys = append(keys, labels.Label{Name: pg.Name, Value: key})
+		}
+		i++
+	}
+	if i < len(postingGroups) {
+		lazyMatchers = make([]*labels.Matcher, 0)
+		for i < len(postingGroups) {
+			lazyMatchers = append(lazyMatchers, postingGroups[i].Matchers...)
+			i++
+		}
+	}
+	return keys, lazyMatchers
+}
+
 // keysToFetchFromPostingGroups returns label pairs (postings) to fetch
 // and matchers we need to use for lazy posting expansion.
 // Input `postingGroups` needs to be ordered by cardinality in case lazy
