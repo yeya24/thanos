@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/prometheus/prometheus/tsdb/index"
 	"github.com/thanos-io/objstore/providers/filesystem"
 	"github.com/thanos-io/thanos/pkg/block/indexheader"
 	"io"
@@ -1493,6 +1494,45 @@ func registerBucketOptimize(app extkingpin.AppClause, objStoreConfig *extflag.Pa
 		fmt.Println(labelMatchersToString(matchers))
 		fmt.Println(labels.Labels(lbs).String())
 
+		partitioner := store.NewGapBasedPartitioner(512 * 1024)
+		fetchedPostings, fns, err := store.FetchPostings(ctx, lbs, bkt, ir, partitioner, logger, id)
+		if err != nil {
+			return err
+		}
+		for _, fn := range fns {
+			defer fn()
+		}
+
+		postingIndex := 0
+
+		var groupAdds, groupRemovals []index.Postings
+		for _, g := range pgs {
+			if g.Lazy {
+				break
+			}
+			// We cannot add empty set to groupAdds, since they are intersected.
+			if len(g.AddKeys) > 0 {
+				toMerge := make([]index.Postings, 0, len(g.AddKeys))
+				for _, l := range g.AddKeys {
+					toMerge = append(toMerge, store.CheckNilPosting(g.Name, l, fetchedPostings[postingIndex]))
+					postingIndex++
+				}
+
+				groupAdds = append(groupAdds, index.Merge(toMerge...))
+			}
+
+			for _, l := range g.RemoveKeys {
+				groupRemovals = append(groupRemovals, store.CheckNilPosting(g.Name, l, fetchedPostings[postingIndex]))
+				postingIndex++
+			}
+		}
+
+		result := index.Without(index.Intersect(groupAdds...), index.Merge(groupRemovals...))
+		ps, err := store.ExpandPostingsWithContext(ctx, result)
+		if err != nil {
+			return errors.Wrap(err, "expand")
+		}
+		fmt.Printf("final postings length: %d\n", len(ps))
 		return nil
 	})
 }

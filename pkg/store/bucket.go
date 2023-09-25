@@ -2586,6 +2586,14 @@ func (pg postingGroup) mergeKeys(other *postingGroup) *postingGroup {
 	return &pg
 }
 
+func CheckNilPosting(name, value string, p index.Postings) index.Postings {
+	if p == nil {
+		// This should not happen. Debug for https://github.com/thanos-io/thanos/issues/874.
+		return index.ErrPostings(errors.Errorf("postings is nil for {%s=%s}. It was never fetched.", name, value))
+	}
+	return p
+}
+
 func checkNilPosting(name, value string, p index.Postings) index.Postings {
 	if p == nil {
 		// This should not happen. Debug for https://github.com/thanos-io/thanos/issues/874.
@@ -2872,6 +2880,83 @@ var bufioReaderPool = sync.Pool{
 	New: func() any {
 		return bufio.NewReader(nil)
 	},
+}
+
+func FetchPostings(ctx context.Context, keys []labels.Label, bkt objstore.BucketReader, ir indexheader.Reader, partitioner Partitioner, logger log.Logger, ulid ulid.ULID) ([]index.Postings, []func(), error) {
+	var closeFns []func()
+	var ptrs []postingPtr
+
+	output := make([]index.Postings, len(keys))
+
+	// Iterate over all groups and fetch posting from cache.
+	// If we have a miss, mark key to be fetched in `ptrs` slice.
+	// Overlaps are well handled by partitioner, so we don't need to deduplicate keys.
+	for ix, key := range keys {
+		if err := ctx.Err(); err != nil {
+			return nil, closeFns, err
+		}
+
+		// Cache miss; save pointer for actual posting in index stored in object store.
+		ptr, err := ir.PostingsOffset(key.Name, key.Value)
+		if err == indexheader.NotFoundRangeErr {
+			// This block does not have any posting for given key.
+			output[ix] = index.EmptyPostings()
+			continue
+		}
+
+		if err != nil {
+			return nil, closeFns, errors.Wrap(err, "index header PostingsOffset")
+		}
+
+		ptrs = append(ptrs, postingPtr{ptr: ptr, keyID: ix})
+	}
+
+	sort.Slice(ptrs, func(i, j int) bool {
+		return ptrs[i].ptr.Start < ptrs[j].ptr.Start
+	})
+
+	// TODO(bwplotka): Asses how large in worst case scenario this can be. (e.g fetch for AllPostingsKeys)
+	// Consider sub split if too big.
+	parts := partitioner.Partition(len(ptrs), func(i int) (start, end uint64) {
+		return uint64(ptrs[i].ptr.Start), uint64(ptrs[i].ptr.End)
+	})
+
+	g, ctx := errgroup.WithContext(ctx)
+	for _, part := range parts {
+		i, j := part.ElemRng[0], part.ElemRng[1]
+
+		start := int64(part.Start)
+		// We assume index does not have any ptrs that has 0 length.
+		length := int64(part.End) - start
+
+		// Fetch from object storage concurrently and update stats and posting list.
+		g.Go(func() error {
+			brdr := bufioReaderPool.Get().(*bufio.Reader)
+			defer bufioReaderPool.Put(brdr)
+
+			partReader, err := bkt.GetRange(ctx, path.Join(), start, length)
+			if err != nil {
+				return errors.Wrap(err, "read postings range")
+			}
+			defer runutil.CloseWithLogOnErr(logger, partReader, "readIndexRange close range reader")
+			brdr.Reset(partReader)
+
+			rdr := newPostingsReaderBuilder(ctx, brdr, ptrs[i:j], start, length)
+
+			for rdr.Next() {
+				diffVarintPostings, _, keyID := rdr.AtDiffVarint()
+
+				output[keyID] = newDiffVarintPostings(diffVarintPostings, nil)
+			}
+
+			if err := rdr.Error(); err != nil {
+				return errors.Wrap(err, "reading postings")
+			}
+			return nil
+		})
+	}
+
+	return output, closeFns, g.Wait()
 }
 
 // fetchPostings fill postings requested by posting groups.
