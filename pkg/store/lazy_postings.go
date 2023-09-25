@@ -37,7 +37,17 @@ func (p *lazyExpandedPostings) lazyExpanded() bool {
 	return p != nil && len(p.matchers) > 0
 }
 
-func optimizePostingsFetchByDownloadedBytes(r *bucketIndexReader, postingGroups []*postingGroup, seriesMaxSize int64, seriesMatchRatio float64, lazyExpandedPostingSizeBytes prometheus.Counter) ([]*postingGroup, bool, error) {
+type PostingGroup struct {
+	AddAll      bool
+	Name        string
+	Matchers    []*labels.Matcher
+	AddKeys     []string
+	RemoveKeys  []string
+	Cardinality int64
+	Lazy        bool
+}
+
+func optimizePostingsFetchByDownloadedBytes(r indexheader.Reader, postingGroups []*postingGroup, seriesMaxSize int64, seriesMatchRatio float64, lazyExpandedPostingSizeBytes prometheus.Counter) ([]*postingGroup, bool, error) {
 	if len(postingGroups) <= 1 {
 		return postingGroups, false, nil
 	}
@@ -48,7 +58,7 @@ func optimizePostingsFetchByDownloadedBytes(r *bucketIndexReader, postingGroups 
 		if len(pg.removeKeys) > 0 {
 			vals = pg.removeKeys
 		}
-		rngs, err := r.block.indexHeaderReader.PostingsOffsets(pg.name, vals...)
+		rngs, err := r.PostingsOffsets(pg.name, vals...)
 		if err != nil {
 			return nil, false, errors.Wrapf(err, "postings offsets for %s", pg.name)
 		}
@@ -126,6 +136,14 @@ func optimizePostingsFetchByDownloadedBytes(r *bucketIndexReader, postingGroups 
 		// If there is no posting group with add keys, don't skip any posting group until we have one.
 		// Fetch posting group with addAll is much more expensive due to fetch all postings.
 		if hasAdd && pg.cardinality*4 > int64(p*math.Ceil((1-seriesMatchRatio)*float64(seriesBytesToFetch))) {
+			// 20M 0.01
+			// 200K * 3K = 600M
+			// 20M * 0.5 = 10M * 3K
+			// 148158
+			//22951
+			//48711265
+			// 22951 * 3000
+			// 148158 * 4 > 22951 * 1500
 			break
 		}
 		hasAdd = hasAdd || !pg.addAll
@@ -135,6 +153,117 @@ func optimizePostingsFetchByDownloadedBytes(r *bucketIndexReader, postingGroups 
 	for i < len(postingGroups) {
 		postingGroups[i].lazy = true
 		lazyExpandedPostingSizeBytes.Add(float64(4 * postingGroups[i].cardinality))
+		i++
+	}
+	return postingGroups, false, nil
+}
+
+func OptimizePostingsFetchByDownloadedBytes(r indexheader.Reader, postingGroups []*PostingGroup, seriesMaxSize int64, seriesMatchRatio float64, lazyExpandedPostingSizeBytes prometheus.Counter) ([]*PostingGroup, bool, error) {
+	if len(postingGroups) <= 1 {
+		return postingGroups, false, nil
+	}
+	// Collect posting cardinality of each posting group.
+	for _, pg := range postingGroups {
+		// A posting group can have either add keys or remove keys but not both the same time.
+		vals := pg.AddKeys
+		if len(pg.RemoveKeys) > 0 {
+			vals = pg.RemoveKeys
+		}
+		rngs, err := r.PostingsOffsets(pg.Name, vals...)
+		if err != nil {
+			return nil, false, errors.Wrapf(err, "postings offsets for %s", pg.Name)
+		}
+
+		// No posting ranges found means empty posting.
+		if len(rngs) == 0 {
+			return nil, true, nil
+		}
+		for _, r := range rngs {
+			if r == indexheader.NotFoundRange {
+				continue
+			}
+			// Each range starts from the #entries field which is 4 bytes.
+			// Need to subtract it when calculating number of postings.
+			// https://github.com/prometheus/prometheus/blob/v2.46.0/tsdb/docs/format/index.md.
+			pg.Cardinality += (r.End - r.Start - 4) / 4
+		}
+	}
+	slices.SortFunc(postingGroups, func(a, b *PostingGroup) bool {
+		if a.Cardinality == b.Cardinality {
+			return a.Name < b.Name
+		}
+		return a.Cardinality < b.Cardinality
+	})
+
+	/*
+	   Algorithm of choosing what postings we need to fetch right now and what
+	   postings we expand lazily.
+	   Sort posting groups by cardinality, so we can iterate from posting group with the smallest posting size.
+	   The algorithm focuses on fetching fewer data, including postings and series.
+
+	   We need to fetch at least 1 posting group in order to fetch series. So if we only fetch the first posting group,
+	   the data bytes we need to download is formula F1: P1 * 4 + P1 * S where P1 is the number of postings in group 1
+	   and S is the size per series. 4 is the byte size per posting.
+
+	   If we are going to fetch 2 posting groups, we can intersect the two postings to reduce series we need to download (hopefully).
+	   Assuming for each intersection, the series matching ratio is R (0 < R < 1). Then the data bytes we need to download is
+	   formula F2: P1 * 4 + P2 * 4 + P1 * S * R.
+	   We can get formula F3 if we are going to fetch 3 posting groups:
+	   F3: P1 * 4 + P2 * 4 + P3 * 4 + P1 * S * R^2.
+
+	   Let's compare formula F2 and F1 first.
+	   P1 * 4 + P2 * 4 + P1 * S * R < P1 * 4 + P1 * S
+	   => P2 * 4 < P1 * S * (1 - R)
+	   Left hand side is the posting group size and right hand side is basically the series size we don't need to fetch
+	   by having the additional intersection. In order to fetch less data for F2 than F1, we just need to ensure that
+	   the additional postings size is smaller.
+
+	   Let's compare formula F3 and F2.
+	   P1 * 4 + P2 * 4 + P3 * 4 + P1 * S * R^2 < P1 * 4 + P2 * 4 + P1 * S * R
+	   => P3 * 4 < P1 * S * R * (1 - R)
+	   Same as the previous formula.
+
+	   Compare formula F4 (Cost to fetch up to 4 posting groups) and F3.
+	   P4 * 4 < P1 * S * R^2 * (1 - R)
+
+	   We can generalize this to formula: Pn * 4 < P1 * S * R^(n - 2) * (1 - R)
+
+	   The idea of the algorithm:
+	   By iterating the posting group in sorted order of cardinality, we need to make sure that by fetching the current posting group,
+	   the total data fetched is smaller than the previous posting group. If so, then we continue to next posting group,
+	   otherwise we stop.
+
+	   This ensures that when we stop at one posting group, posting groups after it always need to fetch more data.
+	   Based on formula Pn * 4 < P1 * S * R^(n - 2) * (1 - R), left hand side is always increasing while iterating to larger
+	   posting groups while right hand side value is always decreasing as R < 1.
+	*/
+	seriesBytesToFetch := postingGroups[0].Cardinality * seriesMaxSize
+	p := float64(1)
+	i := 1 // Start from index 1 as we always need to fetch the smallest posting group.
+	hasAdd := !postingGroups[0].AddAll
+	for i < len(postingGroups) {
+		pg := postingGroups[i]
+		// Need to fetch more data on postings than series we avoid fetching, stop here and lazy expanding rest of matchers.
+		// If there is no posting group with add keys, don't skip any posting group until we have one.
+		// Fetch posting group with addAll is much more expensive due to fetch all postings.
+		if hasAdd && pg.Cardinality*4 > int64(p*math.Ceil((1-seriesMatchRatio)*float64(seriesBytesToFetch))) {
+			// 20M 0.01
+			// 200K * 3K = 600M
+			// 20M * 0.5 = 10M * 3K
+			// 148158
+			//22951
+			//48711265
+			// 22951 * 3000
+			// 148158 * 4 > 22951 * 1500
+			break
+		}
+		hasAdd = hasAdd || !pg.AddAll
+		p = p * seriesMatchRatio
+		i++
+	}
+	for i < len(postingGroups) {
+		postingGroups[i].Lazy = true
+		lazyExpandedPostingSizeBytes.Add(float64(4 * postingGroups[i].Cardinality))
 		i++
 	}
 	return postingGroups, false, nil
@@ -164,7 +293,7 @@ func fetchLazyExpandedPostings(
 	if lazyExpandedPostingEnabled && !addAllPostings &&
 		r.block.estimatedMaxSeriesSize > 0 && len(postingGroups) > 1 {
 		postingGroups, emptyPostingGroup, err = optimizePostingsFetchByDownloadedBytes(
-			r,
+			r.block.indexHeaderReader,
 			postingGroups,
 			int64(r.block.estimatedMaxSeriesSize),
 			0.5, // TODO(yeya24): Expose this as a flag.

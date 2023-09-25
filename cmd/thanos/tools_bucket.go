@@ -9,6 +9,9 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/thanos-io/objstore/providers/filesystem"
+	"github.com/thanos-io/thanos/pkg/block/indexheader"
 	"io"
 	"net/http"
 	"os"
@@ -151,6 +154,23 @@ type bucketRetentionConfig struct {
 	deleteDelay          time.Duration
 }
 
+type bucketOptimizeConfig struct {
+	dir        string
+	id         string
+	query      string
+	seriesSize int64
+	ratio      float64
+}
+
+func (tbc *bucketOptimizeConfig) registerBucketOptimizeFlag(cmd extkingpin.FlagClause) *bucketOptimizeConfig {
+	cmd.Flag("dir", "dir").StringVar(&tbc.dir)
+	cmd.Flag("id", "ULID").StringVar(&tbc.id)
+	cmd.Flag("query", "query").StringVar(&tbc.query)
+	cmd.Flag("series-size", "series size").Int64Var(&tbc.seriesSize)
+	cmd.Flag("ratio", "ratio").Float64Var(&tbc.ratio)
+	return tbc
+}
+
 type bucketMarkBlockConfig struct {
 	details      string
 	marker       string
@@ -291,6 +311,7 @@ func registerBucket(app extkingpin.AppClause) {
 	registerBucketMarkBlock(cmd, objStoreConfig)
 	registerBucketRewrite(cmd, objStoreConfig)
 	registerBucketRetention(cmd, objStoreConfig)
+	registerBucketOptimize(cmd, objStoreConfig)
 }
 
 func registerBucketVerify(app extkingpin.AppClause, objStoreConfig *extflag.PathOrContent) {
@@ -1413,4 +1434,71 @@ func registerBucketRetention(app extkingpin.AppClause, objStoreConfig *extflag.P
 		}
 		return nil
 	})
+}
+
+func registerBucketOptimize(app extkingpin.AppClause, objStoreConfig *extflag.PathOrContent) {
+	cmd := app.Command("optimize", "Retention applies retention policies on the given bucket. Please make sure no compactor is running on the same bucket at the same time.")
+
+	tbc := &bucketOptimizeConfig{}
+	tbc.registerBucketOptimizeFlag(cmd)
+
+	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ <-chan struct{}, _ bool) error {
+		bkt, err := filesystem.NewBucket(tbc.dir)
+		if err != nil {
+			return err
+		}
+
+		// Dummy actor to immediately kill the group after the run function returns.
+		g.Add(func() error { return nil }, func(error) {})
+
+		defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
+		id, err := ulid.Parse(tbc.id)
+		if err != nil {
+			return err
+		}
+
+		ms, err := parser.ParseMetricSelector(tbc.query)
+		if err != nil {
+			return err
+		}
+		ctx := context.Background()
+		ir, err := indexheader.NewBinaryReader(ctx, logger, bkt, "", id, 32)
+		if err != nil {
+			return err
+		}
+
+		pgs, err := store.MatchersToPostingGroups2(ctx, func(name string) ([]string, error) {
+			return ir.LabelValues(name)
+		}, ms)
+		if err != nil {
+			return err
+		}
+
+		if len(pgs) <= 1 {
+			fmt.Println("not enough posting groups")
+		}
+
+		c := prometheus.NewCounter(prometheus.CounterOpts{Name: "", Help: ""})
+		pgs, emptyGroup, err := store.OptimizePostingsFetchByDownloadedBytes(ir, pgs, tbc.seriesSize, tbc.ratio, c)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("empty group: %s\n", strconv.FormatBool(emptyGroup))
+		for _, pg := range pgs {
+			fmt.Printf("name: %s, matchers: %s, lazy: %s, Cardinality: %d, AddAll: %s, AddKeys: %v, RemoveKeys: %v\n", pg.Name, labelMatchersToString(pg.Matchers), strconv.FormatBool(pg.Lazy), pg.Cardinality, strconv.FormatBool(pg.AddAll), pg.AddKeys, pg.RemoveKeys)
+		}
+
+		return nil
+	})
+}
+
+func labelMatchersToString(matchers []*labels.Matcher) string {
+	sb := strings.Builder{}
+	for i, lbl := range matchers {
+		sb.WriteString(lbl.String())
+		if i < len(matchers)-1 {
+			sb.WriteRune(';')
+		}
+	}
+	return sb.String()
 }

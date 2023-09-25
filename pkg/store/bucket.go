@@ -2406,7 +2406,7 @@ func (r *bucketIndexReader) ExpandedPostings(ctx context.Context, ms sortedMatch
 		hasAdds      = false
 	)
 
-	postingGroups, err := matchersToPostingGroups(ctx, r.block.indexHeaderReader.LabelValues, ms)
+	postingGroups, err := MatchersToPostingGroups(ctx, r.block.indexHeaderReader.LabelValues, ms)
 	if err != nil {
 		return nil, errors.Wrap(err, "matchersToPostingGroups")
 	}
@@ -2594,7 +2594,82 @@ func checkNilPosting(name, value string, p index.Postings) index.Postings {
 	return p
 }
 
-func matchersToPostingGroups(ctx context.Context, lvalsFn func(name string) ([]string, error), ms []*labels.Matcher) ([]*postingGroup, error) {
+func MatchersToPostingGroups2(ctx context.Context, lvalsFn func(name string) ([]string, error), ms []*labels.Matcher) ([]*PostingGroup, error) {
+	matchersMap := make(map[string]map[string]*labels.Matcher)
+	for _, m := range ms {
+		m := m
+		if _, ok := matchersMap[m.Name]; !ok {
+			matchersMap[m.Name] = make(map[string]*labels.Matcher)
+		}
+		matchersMap[m.Name][m.String()] = m
+	}
+
+	pgs := make([]*PostingGroup, 0, len(matchersMap))
+	// NOTE: Derived from tsdb.PostingsForMatchers.
+	for _, values := range matchersMap {
+		var (
+			mergedPG     *postingGroup
+			pg           *postingGroup
+			vals         []string
+			err          error
+			valuesCached bool
+		)
+		lvalsFunc := lvalsFn
+		matchers := make([]*labels.Matcher, 0, len(vals))
+		// Merge PostingGroups with the same matcher into 1 to
+		// avoid fetching duplicate postings.
+		for _, val := range values {
+			pg, vals, err = toPostingGroup(ctx, lvalsFunc, val)
+			if err != nil {
+				return nil, errors.Wrap(err, "toPostingGroup")
+			}
+			// Cache label values because label name is the same.
+			if !valuesCached && vals != nil {
+				lvalsFunc = func(_ string) ([]string, error) {
+					return vals, nil
+				}
+				valuesCached = true
+			}
+
+			// If this groups adds nothing, it's an empty group. We can shortcut this, since intersection with empty
+			// postings would return no postings anyway.
+			// E.g. label="non-existing-value" returns empty group.
+			if !pg.addAll && len(pg.addKeys) == 0 {
+				return nil, nil
+			}
+			if mergedPG == nil {
+				mergedPG = pg
+			} else {
+				mergedPG = mergedPG.mergeKeys(pg)
+			}
+
+			// If this groups adds nothing, it's an empty group. We can shortcut this, since intersection with empty
+			// postings would return no postings anyway.
+			// E.g. label="non-existing-value" returns empty group.
+			if !mergedPG.addAll && len(mergedPG.addKeys) == 0 {
+				return nil, nil
+			}
+			matchers = append(matchers, val)
+		}
+		// Set and sort matchers to be used when picking up posting fetch strategy.
+		mergedPG.matchers = newSortedMatchers(matchers)
+		pgs = append(pgs, &PostingGroup{
+			AddAll:      pg.addAll,
+			Name:        pg.name,
+			Matchers:    pg.matchers,
+			AddKeys:     pg.addKeys,
+			RemoveKeys:  pg.removeKeys,
+			Cardinality: pg.cardinality,
+			Lazy:        pg.lazy,
+		})
+	}
+	slices.SortFunc(pgs, func(a, b *PostingGroup) bool {
+		return a.Name < b.Name
+	})
+	return pgs, nil
+}
+
+func MatchersToPostingGroups(ctx context.Context, lvalsFn func(name string) ([]string, error), ms []*labels.Matcher) ([]*postingGroup, error) {
 	matchersMap := make(map[string]map[string]*labels.Matcher)
 	for _, m := range ms {
 		m := m
