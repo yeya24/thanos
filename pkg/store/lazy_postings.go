@@ -170,6 +170,7 @@ func OptimizePostingsFetchByDownloadedBytes(r indexheader.Reader, postingGroups 
 		if len(pg.RemoveKeys) > 0 {
 			vals = pg.RemoveKeys
 		}
+		fmt.Printf("values for postings offsets: %s %v\n", pg.Name, vals)
 		rngs, err := r.PostingsOffsets(pg.Name, vals...)
 		if err != nil {
 			return nil, false, errors.Wrapf(err, "postings offsets for %s", pg.Name)
@@ -180,7 +181,7 @@ func OptimizePostingsFetchByDownloadedBytes(r indexheader.Reader, postingGroups 
 			return nil, true, nil
 		}
 		for i, r := range rngs {
-			fmt.Printf("posting range: %d %d %d Value: %s\n", i, r.Start, r.End, vals[i])
+			fmt.Printf("posting range: %d %d %d Name: %s Value: %s\n", i, r.Start, r.End, pg.Name, vals[i])
 			if r == indexheader.NotFoundRange {
 				continue
 			}
