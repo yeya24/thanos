@@ -1496,7 +1496,7 @@ func registerBucketOptimize(app extkingpin.AppClause, objStoreConfig *extflag.Pa
 		fmt.Printf("lazy expanding keys: %s\n", labels.Labels(lbs).String())
 
 		partitioner := store.NewGapBasedPartitioner(512 * 1024)
-		ps, err := fetchAndExpand(ctx, lbs, bkt, ir, partitioner, logger, id, pgs)
+		ps, err := fetchAndExpand(ctx, lbs, bkt, ir, partitioner, logger, id, pgs, true)
 		if err != nil {
 			return err
 		}
@@ -1504,7 +1504,7 @@ func registerBucketOptimize(app extkingpin.AppClause, objStoreConfig *extflag.Pa
 
 		lbls, _ := store.KeysToFetchFromPostingGroups(pgs, false)
 		fmt.Printf("normal expanding keys: %s\n", labels.Labels(lbls).String())
-		newPs, err := fetchAndExpand(ctx, lbls, bkt, ir, partitioner, logger, id, pgs)
+		newPs, err := fetchAndExpand(ctx, lbls, bkt, ir, partitioner, logger, id, pgs, false)
 		if err != nil {
 			return err
 		}
@@ -1513,7 +1513,7 @@ func registerBucketOptimize(app extkingpin.AppClause, objStoreConfig *extflag.Pa
 	})
 }
 
-func fetchAndExpand(ctx context.Context, keys []labels.Label, bkt objstore.BucketReader, ir indexheader.Reader, partitioner store.Partitioner, logger log.Logger, id ulid.ULID, pgs []*store.PostingGroup) ([]storage.SeriesRef, error) {
+func fetchAndExpand(ctx context.Context, keys []labels.Label, bkt objstore.BucketReader, ir indexheader.Reader, partitioner store.Partitioner, logger log.Logger, id ulid.ULID, pgs []*store.PostingGroup, lazy bool) ([]storage.SeriesRef, error) {
 	fetchedPostings, fns, err := store.FetchPostings(ctx, keys, bkt, ir, partitioner, logger, id)
 	if err != nil {
 		return nil, err
@@ -1526,7 +1526,7 @@ func fetchAndExpand(ctx context.Context, keys []labels.Label, bkt objstore.Bucke
 
 	var groupAdds, groupRemovals []index.Postings
 	for _, g := range pgs {
-		if g.Lazy {
+		if lazy && g.Lazy {
 			break
 		}
 		// We cannot add empty set to groupAdds, since they are intersected.
