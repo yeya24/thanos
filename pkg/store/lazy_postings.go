@@ -314,13 +314,13 @@ func fetchLazyExpandedPostings(
 	return &lazyExpandedPostings{postings: ps, matchers: matchers}, nil
 }
 
-func KeysToFetchFromPostingGroups(postingGroups []*PostingGroup) ([]labels.Label, []*labels.Matcher) {
+func KeysToFetchFromPostingGroups(postingGroups []*PostingGroup, lazy bool) ([]labels.Label, []*labels.Matcher) {
 	var lazyMatchers []*labels.Matcher
 	keys := make([]labels.Label, 0)
 	i := 0
 	for i < len(postingGroups) {
 		pg := postingGroups[i]
-		if pg.Lazy {
+		if lazy && pg.Lazy {
 			break
 		}
 
