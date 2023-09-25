@@ -2934,7 +2934,7 @@ func FetchPostings(ctx context.Context, keys []labels.Label, bkt objstore.Bucket
 			brdr := bufioReaderPool.Get().(*bufio.Reader)
 			defer bufioReaderPool.Put(brdr)
 
-			partReader, err := bkt.GetRange(ctx, ulid.String(), start, length)
+			partReader, err := bkt.GetRange(ctx, path.Join(ulid.String(), block.IndexFilename), start, length)
 			if err != nil {
 				return errors.Wrap(err, "read postings range")
 			}
