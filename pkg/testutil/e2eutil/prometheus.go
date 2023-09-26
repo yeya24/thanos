@@ -71,7 +71,7 @@ var histogramSample = histogram.Histogram{
 }
 
 func PrometheusBinary() string {
-	return "prometheus-" + defaultPrometheusVersion
+	return "prometheus"
 }
 
 func AlertmanagerBinary() string {

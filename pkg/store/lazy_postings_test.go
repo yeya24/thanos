@@ -238,7 +238,17 @@ func (h *mockIndexHeaderReader) PostingsOffsets(name string, value ...string) ([
 }
 
 func (h *mockIndexHeaderReader) PostingsOffset(name string, value string) (index.Range, error) {
-	return index.Range{}, nil
+	if h.err != nil {
+		return index.Range{}, h.err
+	}
+	if _, ok := h.postings[name]; !ok {
+		return indexheader.NotFoundRange, nil
+	}
+	rng, ok := h.postings[name][value]
+	if ok {
+		return rng, nil
+	}
+	return indexheader.NotFoundRange, nil
 }
 
 func (h *mockIndexHeaderReader) LookupSymbol(o uint32) (string, error) { return "", nil }

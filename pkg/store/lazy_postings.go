@@ -6,7 +6,9 @@ package store
 import (
 	"context"
 	"math"
+	"strings"
 
+	"github.com/go-kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/model/labels"
@@ -48,15 +50,18 @@ func optimizePostingsFetchByDownloadedBytes(r *bucketIndexReader, postingGroups 
 		if len(pg.removeKeys) > 0 {
 			vals = pg.removeKeys
 		}
-		rngs, err := r.block.indexHeaderReader.PostingsOffsets(pg.name, vals...)
-		if err != nil {
-			return nil, false, errors.Wrapf(err, "postings offsets for %s", pg.name)
+
+		rngs := make([]index.Range, 0, len(vals))
+		for _, val := range vals {
+			rng, err := r.block.indexHeaderReader.PostingsOffset(pg.name, val)
+			if err == indexheader.NotFoundRangeErr {
+				continue
+			} else if err != nil {
+				return nil, false, errors.Wrapf(err, "postings offsets for %s", pg.name)
+			}
+			rngs = append(rngs, rng)
 		}
 
-		// No posting ranges found means empty posting.
-		if len(rngs) == 0 {
-			return nil, true, nil
-		}
 		for _, r := range rngs {
 			if r == indexheader.NotFoundRange {
 				continue
@@ -65,6 +70,10 @@ func optimizePostingsFetchByDownloadedBytes(r *bucketIndexReader, postingGroups 
 			// Need to subtract it when calculating number of postings.
 			// https://github.com/prometheus/prometheus/blob/v2.46.0/tsdb/docs/format/index.md.
 			pg.cardinality += (r.End - r.Start - 4) / 4
+		}
+		// No cardinality means empty posting.
+		if pg.cardinality == 0 {
+			return nil, true, nil
 		}
 	}
 	slices.SortFunc(postingGroups, func(a, b *postingGroup) bool {
@@ -182,6 +191,12 @@ func fetchLazyExpandedPostings(
 	if err != nil {
 		return nil, err
 	}
+	if len(matchers) > 0 {
+		for _, pg := range postingGroups {
+			level.Info(r.block.logger).Log("name", pg.name, "matchers", labelMatchersToString(pg.matchers), "cardinality", pg.cardinality, "addKeyLen", len(pg.addKeys), "removeKeyLen", len(pg.removeKeys))
+		}
+		level.Info(r.block.logger).Log("expanded posting length", len(ps), "lazy matchers", labelMatchersToString(matchers))
+	}
 	return &lazyExpandedPostings{postings: ps, matchers: matchers}, nil
 }
 
@@ -269,4 +284,15 @@ func fetchAndExpandPostingGroups(ctx context.Context, r *bucketIndexReader, post
 		return nil, nil, errors.Wrap(err, "expand")
 	}
 	return ps, lazyMatchers, nil
+}
+
+func labelMatchersToString(matchers []*labels.Matcher) string {
+	sb := strings.Builder{}
+	for i, lbl := range matchers {
+		sb.WriteString(lbl.String())
+		if i < len(matchers)-1 {
+			sb.WriteRune(';')
+		}
+	}
+	return sb.String()
 }
