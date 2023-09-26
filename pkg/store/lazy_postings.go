@@ -5,10 +5,10 @@ package store
 
 import (
 	"context"
+	"github.com/go-kit/log/level"
 	"math"
 	"strings"
 
-	"github.com/go-kit/log/level"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/prometheus/model/labels"
@@ -192,10 +192,7 @@ func fetchLazyExpandedPostings(
 		return nil, err
 	}
 	if len(matchers) > 0 {
-		for _, pg := range postingGroups {
-			level.Info(r.block.logger).Log("name", pg.name, "matchers", labelMatchersToString(pg.matchers), "cardinality", pg.cardinality, "addKeyLen", len(pg.addKeys), "removeKeyLen", len(pg.removeKeys))
-		}
-		level.Info(r.block.logger).Log("expanded posting length", len(ps), "lazy matchers", labelMatchersToString(matchers))
+		level.Info(r.block.logger).Log("expanded_posting_length", len(ps), "lazy_matchers", labelMatchersToString(matchers))
 	}
 	return &lazyExpandedPostings{postings: ps, matchers: matchers}, nil
 }
@@ -237,6 +234,11 @@ func keysToFetchFromPostingGroups(postingGroups []*postingGroup) ([]labels.Label
 
 func fetchAndExpandPostingGroups(ctx context.Context, r *bucketIndexReader, postingGroups []*postingGroup, bytesLimiter BytesLimiter) ([]storage.SeriesRef, []*labels.Matcher, error) {
 	keys, lazyMatchers := keysToFetchFromPostingGroups(postingGroups)
+	if len(lazyMatchers) > 0 {
+		for _, pg := range postingGroups {
+			level.Info(r.block.logger).Log("name", pg.name, "matchers", labelMatchersToString(pg.matchers), "cardinality", pg.cardinality, "add_keys", len(pg.addKeys), "remove_keys", len(pg.removeKeys))
+		}
+	}
 	fetchedPostings, closeFns, err := r.fetchPostings(ctx, keys, bytesLimiter)
 	defer func() {
 		for _, closeFn := range closeFns {
