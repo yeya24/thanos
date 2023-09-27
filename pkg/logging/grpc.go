@@ -117,7 +117,7 @@ func InterceptorLogger(l log.Logger) grpc_logging.Logger {
 	})
 }
 
-// NewGRPCOption adds in the config options and returns tags for logging middleware.
+// NewGRPCOption adds in the config options for logging middleware.
 func NewGRPCOption(configYAML []byte) ([]grpc_logging.Option, []string, error) {
 
 	var logOpts []grpc_logging.Option
