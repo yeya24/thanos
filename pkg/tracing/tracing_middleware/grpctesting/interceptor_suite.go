@@ -6,6 +6,7 @@ package grpctesting
 import (
 	"context"
 	"flag"
+	"google.golang.org/grpc/credentials/insecure"
 	"net"
 	"path"
 	"runtime"
@@ -113,8 +114,7 @@ func (s *InterceptorTestSuite) NewClient(dialOpts ...grpc.DialOption) testpb.Tes
 		require.NoError(s.T(), err, "failed reading client credentials for localhost.crt")
 		newDialOpts = append(newDialOpts, grpc.WithTransportCredentials(creds))
 	} else {
-		//lint:ignore SA1019 reason: temp migration(will be removed when migrated to otel)
-		newDialOpts = append(newDialOpts, grpc.WithInsecure())
+		newDialOpts = append(newDialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
