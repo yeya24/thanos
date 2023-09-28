@@ -31,11 +31,6 @@ type opentracingServerReporter struct {
 }
 
 func (o *opentracingServerReporter) PostCall(err error, _ time.Duration) {
-	// Finish span and log context information.
-	//tags := tags.Extract(o.ctx)
-	//for k, v := range tags.Values() {
-	//	o.serverSpan.SetTag(k, v)
-	//}
 	if err != nil {
 		ext.Error.Set(o.serverSpan, true)
 		o.serverSpan.LogFields(log.String("event", "error"), log.String("message", err.Error()))

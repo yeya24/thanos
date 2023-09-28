@@ -74,7 +74,7 @@ func fillGlobalOptionConfig(reqLogConfig *RequestConfig, isgRPC bool) (string, b
 }
 
 // getGRPCLoggingOption returns the logging ENUM based on logStart and logEnd values.
-func getGRPCLoggingOption(logStart, logEnd bool) (opts grpc_logging.Option, err error) {
+func getGRPCLoggingOption(logStart, logEnd bool) (grpc_logging.Option, error) {
 	if !logStart && !logEnd {
 		return grpc_logging.WithLogOnEvents(), nil
 	}
