@@ -562,6 +562,12 @@ func newMemoryBinaryReader(buf []byte, postingOffsetsInMemSampling int) (bw *Bin
 		postings:                    map[string]*postingValueOffsets{},
 		postingOffsetsInMemSampling: postingOffsetsInMemSampling,
 	}
+	toc, err := index.NewTOCFromByteSlice(r.b)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("TOC fields: Symbols %d, LabelIndices %d, LabelIndicesTable %d, Postings %d, Series %d, PostingsTable %d\n", toc.Symbols, toc.LabelIndices, toc.LabelIndicesTable, toc.Postings, toc.Series, toc.PostingsTable)
 
 	if err := r.init(); err != nil {
 		return nil, err
@@ -587,12 +593,6 @@ func newFileBinaryReader(path string, postingOffsetsInMemSampling int) (bw *Bina
 		postings:                    map[string]*postingValueOffsets{},
 		postingOffsetsInMemSampling: postingOffsetsInMemSampling,
 	}
-	toc, err := index.NewTOCFromByteSlice(r.b)
-	if err != nil {
-		return nil, err
-	}
-
-	fmt.Printf("TOC fields: Symbols %d, LabelIndices %d, LabelIndicesTable %d, Postings %d, Series %d, PostingsTable %d\n", toc.Symbols, toc.LabelIndices, toc.LabelIndicesTable, toc.Postings, toc.Series, toc.PostingsTable)
 
 	if err := r.init(); err != nil {
 		return nil, err
