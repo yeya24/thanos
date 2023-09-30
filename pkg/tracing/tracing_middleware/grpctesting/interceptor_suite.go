@@ -6,7 +6,6 @@ package grpctesting
 import (
 	"context"
 	"flag"
-	"google.golang.org/grpc/credentials/insecure"
 	"net"
 	"path"
 	"runtime"
@@ -17,6 +16,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/thanos-io/thanos/pkg/tracing/tracing_middleware/grpctesting/testpb"
 )
