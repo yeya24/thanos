@@ -819,10 +819,10 @@ func (qapi *QueryAPI) labelValues(r *http.Request) (interface{}, []error, *api.A
 
 	var (
 		vals     []string
-		warnings storage.Warnings
+		warnings annotations.Annotations
 	)
 	if len(matcherSets) > 0 {
-		var callWarnings storage.Warnings
+		var callWarnings annotations.Annotations
 		labelValuesSet := make(map[string]struct{})
 		for _, matchers := range matcherSets {
 			vals, callWarnings, err = q.LabelValues(name, matchers...)
@@ -989,11 +989,11 @@ func (qapi *QueryAPI) labelNames(r *http.Request) (interface{}, []error, *api.Ap
 
 	var (
 		names    []string
-		warnings storage.Warnings
+		warnings annotations.Annotations
 	)
 
 	if len(matcherSets) > 0 {
-		var callWarnings storage.Warnings
+		var callWarnings annotations.Annotations
 		labelNamesSet := make(map[string]struct{})
 		for _, matchers := range matcherSets {
 			names, callWarnings, err = q.LabelNames(matchers...)
@@ -1083,7 +1083,7 @@ func NewAlertsHandler(client rules.UnaryClient, enablePartialResponse bool) func
 
 		var (
 			groups   *rulespb.RuleGroups
-			warnings storage.Warnings
+			warnings annotations.Annotations
 			err      error
 		)
 
@@ -1129,7 +1129,7 @@ func NewRulesHandler(client rules.UnaryClient, enablePartialResponse bool) func(
 
 		var (
 			groups   *rulespb.RuleGroups
-			warnings storage.Warnings
+			warnings annotations.Annotations
 			err      error
 		)
 
@@ -1176,7 +1176,7 @@ func NewExemplarsHandler(client exemplars.UnaryClient, enablePartialResponse boo
 
 		var (
 			data     []*exemplarspb.ExemplarData
-			warnings storage.Warnings
+			warnings annotations.Annotations
 			err      error
 		)
 
@@ -1294,7 +1294,7 @@ func NewMetricMetadataHandler(client metadata.UnaryClient, enablePartialResponse
 
 		var (
 			t        map[string][]metadatapb.Meta
-			warnings storage.Warnings
+			warnings annotations.Annotations
 			err      error
 		)
 

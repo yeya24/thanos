@@ -1108,7 +1108,7 @@ func uploadTestBlock(t testing.TB, tmpDir string, bkt objstore.Bucket, series in
 	bdir := filepath.Join(dir, id.String())
 	meta, err := metadata.ReadFromDir(bdir)
 	testutil.Ok(t, err)
-	stats, err := block.GatherIndexHealthStats(logger, filepath.Join(bdir, block.IndexFilename), meta.MinTime, meta.MaxTime)
+	stats, err := block.GatherIndexHealthStats(ctx, logger, filepath.Join(bdir, block.IndexFilename), meta.MinTime, meta.MaxTime)
 	testutil.Ok(t, err)
 
 	_, err = metadata.InjectThanos(log.NewNopLogger(), filepath.Join(tmpDir, "tmp", id.String()), metadata.Thanos{
@@ -1368,7 +1368,7 @@ func benchBucketSeries(t testutil.TB, sampleType chunkenc.ValueType, skipChunk, 
 		blockIDDir := filepath.Join(blockDir, id.String())
 		meta, err := metadata.ReadFromDir(blockIDDir)
 		testutil.Ok(t, err)
-		stats, err := block.GatherIndexHealthStats(logger, filepath.Join(blockIDDir, block.IndexFilename), meta.MinTime, meta.MaxTime)
+		stats, err := block.GatherIndexHealthStats(context.TODO(), logger, filepath.Join(blockIDDir, block.IndexFilename), meta.MinTime, meta.MaxTime)
 		testutil.Ok(t, err)
 		thanosMeta := metadata.Thanos{
 			Labels:     extLset.Map(),
@@ -2687,7 +2687,7 @@ func prepareBucket(b *testing.B, resolutionLevel compact.ResolutionLevel) (*buck
 
 	if resolutionLevel > 0 {
 		// Downsample newly-created block.
-		blockID, err = downsample.Downsample(logger, blockMeta, head, tmpDir, int64(resolutionLevel))
+		blockID, err = downsample.Downsample(ctx, logger, blockMeta, head, tmpDir, int64(resolutionLevel))
 		testutil.Ok(b, err)
 		blockMeta, err = metadata.ReadFromDir(filepath.Join(tmpDir, blockID.String()))
 		testutil.Ok(b, err)
@@ -3481,8 +3481,8 @@ func TestBucketStoreDedupOnBlockSeriesSet(t *testing.T) {
 		},
 	}, srv))
 
-	testutil.Equals(t, true, slices.IsSortedFunc(srv.SeriesSet, func(x, y storepb.Series) bool {
-		return labels.Compare(x.PromLabels(), y.PromLabels()) < 0
+	testutil.Equals(t, true, slices.IsSortedFunc(srv.SeriesSet, func(x, y storepb.Series) int {
+		return labels.Compare(x.PromLabels(), y.PromLabels())
 	}))
 	testutil.Equals(t, 2, len(srv.SeriesSet))
 }

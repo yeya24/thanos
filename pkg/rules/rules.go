@@ -13,7 +13,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
-	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/util/annotations"
 
 	"github.com/thanos-io/thanos/pkg/rules/rulespb"
 	"github.com/thanos-io/thanos/pkg/tracing"
@@ -24,7 +24,7 @@ var _ UnaryClient = &GRPCClient{}
 // UnaryClient is gRPC rulespb.Rules client which expands streaming rules API. Useful for consumers that does not
 // support streaming.
 type UnaryClient interface {
-	Rules(ctx context.Context, req *rulespb.RulesRequest) (*rulespb.RuleGroups, storage.Warnings, error)
+	Rules(ctx context.Context, req *rulespb.RulesRequest) (*rulespb.RuleGroups, annotations.Annotations, error)
 }
 
 // GRPCClient allows to retrieve rules from local gRPC streaming server implementation.
@@ -51,7 +51,7 @@ func NewGRPCClientWithDedup(rs rulespb.RulesServer, replicaLabels []string) *GRP
 	return c
 }
 
-func (rr *GRPCClient) Rules(ctx context.Context, req *rulespb.RulesRequest) (*rulespb.RuleGroups, storage.Warnings, error) {
+func (rr *GRPCClient) Rules(ctx context.Context, req *rulespb.RulesRequest) (*rulespb.RuleGroups, annotations.Annotations, error) {
 	span, ctx := tracing.StartSpan(ctx, "rules_request")
 	defer span.Finish()
 

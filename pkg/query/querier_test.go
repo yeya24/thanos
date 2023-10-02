@@ -1001,8 +1001,8 @@ func (q *querierResponseCatcher) Select(selectSorted bool, p *storage.SelectHint
 
 func (q querierResponseCatcher) Close() error { return nil }
 
-func (q *querierResponseCatcher) warns() []storage.Warnings {
-	var warns []storage.Warnings
+func (q *querierResponseCatcher) warns() []annotations.Annotations {
+	var warns []annotations.Annotations
 	for _, r := range q.resp {
 		warns = append(warns, r.Warnings())
 	}

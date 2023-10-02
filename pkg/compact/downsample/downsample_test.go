@@ -4,6 +4,7 @@
 package downsample
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -1146,7 +1147,7 @@ func TestDownsample(t *testing.T) {
 				fakeMeta.Thanos.Downsample.Resolution = tcase.resolution - 1
 			}
 
-			id, err := Downsample(logger, fakeMeta, mb, dir, tcase.resolution)
+			id, err := Downsample(context.TODO(), logger, fakeMeta, mb, dir, tcase.resolution)
 			if tcase.expectedDownsamplingErr != nil {
 				testutil.NotOk(t, err)
 				testutil.Equals(t, tcase.expectedDownsamplingErr(ser.chunks).Error(), err.Error())
@@ -1165,7 +1166,8 @@ func TestDownsample(t *testing.T) {
 			testutil.Ok(t, err)
 			defer func() { testutil.Ok(t, chunkr.Close()) }()
 
-			pall, err := indexr.Postings(index.AllPostingsKey())
+			key, values := index.AllPostingsKey()
+			pall, err := indexr.Postings(context.TODO(), key, values)
 			testutil.Ok(t, err)
 
 			var series []storage.SeriesRef
@@ -1231,7 +1233,7 @@ func TestDownsampleAggrAndEmptyXORChunks(t *testing.T) {
 
 	fakeMeta := &metadata.Meta{}
 	fakeMeta.Thanos.Downsample.Resolution = 300_000
-	id, err := Downsample(logger, fakeMeta, mb, dir, 3_600_000)
+	id, err := Downsample(context.TODO(), logger, fakeMeta, mb, dir, 3_600_000)
 	_ = id
 	testutil.Ok(t, err)
 }
@@ -1265,7 +1267,7 @@ func TestDownsampleAggrAndNonEmptyXORChunks(t *testing.T) {
 
 	fakeMeta := &metadata.Meta{}
 	fakeMeta.Thanos.Downsample.Resolution = 300_000
-	id, err := Downsample(logger, fakeMeta, mb, dir, 3_600_000)
+	id, err := Downsample(context.TODO(), logger, fakeMeta, mb, dir, 3_600_000)
 	_ = id
 	testutil.Ok(t, err)
 
@@ -1290,7 +1292,8 @@ func TestDownsampleAggrAndNonEmptyXORChunks(t *testing.T) {
 	testutil.Ok(t, err)
 	defer func() { testutil.Ok(t, chunkr.Close()) }()
 
-	pall, err := indexr.Postings(index.AllPostingsKey())
+	key, values := index.AllPostingsKey()
+	pall, err := indexr.Postings(context.TODO(), key, values)
 	testutil.Ok(t, err)
 
 	var series []storage.SeriesRef
@@ -1637,23 +1640,23 @@ func TestSamplesFromTSDBSamples(t *testing.T) {
 	for _, tcase := range []struct {
 		name string
 
-		input []tsdbutil.Sample
+		input []chunks.Sample
 
 		expected []sample
 	}{
 		{
 			name:     "empty",
-			input:    []tsdbutil.Sample{},
+			input:    []chunks.Sample{},
 			expected: []sample{},
 		},
 		{
 			name:     "one sample",
-			input:    []tsdbutil.Sample{testSample{1, 1}},
+			input:    []chunks.Sample{testSample{1, 1}},
 			expected: []sample{{1, 1}},
 		},
 		{
 			name:     "multiple samples",
-			input:    []tsdbutil.Sample{testSample{1, 1}, testSample{2, 2}, testSample{3, 3}, testSample{4, 4}, testSample{5, 5}},
+			input:    []chunks.Sample{testSample{1, 1}, testSample{2, 2}, testSample{3, 3}, testSample{4, 4}, testSample{5, 5}},
 			expected: []sample{{1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}},
 		},
 	} {
@@ -1664,7 +1667,7 @@ func TestSamplesFromTSDBSamples(t *testing.T) {
 	}
 }
 
-// testSample implements tsdbutil.Sample interface.
+// testSample implements chunks.Sample interface.
 type testSample struct {
 	t int64
 	f float64

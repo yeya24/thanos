@@ -1171,7 +1171,7 @@ OUTER:
 			continue
 		}
 
-		if err := b.indexr.LookupLabelsSymbols(b.symbolizedLset, &b.lset); err != nil {
+		if err := b.indexr.LookupLabelsSymbols(b.ctx, b.symbolizedLset, &b.lset); err != nil {
 			return errors.Wrap(err, "Lookup labels symbols")
 		}
 
@@ -2662,8 +2662,8 @@ func matchersToPostingGroups(ctx context.Context, lvalsFn func(name string) ([]s
 		mergedPG.matchers = newSortedMatchers(matchers)
 		pgs = append(pgs, mergedPG)
 	}
-	slices.SortFunc(pgs, func(a, b *postingGroup) bool {
-		return a.name < b.name
+	slices.SortFunc(pgs, func(a, b *postingGroup) int {
+		return strings.Compare(a.name, b.name)
 	})
 	return pgs, nil
 }
@@ -3219,14 +3219,14 @@ func (r *bucketIndexReader) Close() error {
 }
 
 // LookupLabelsSymbols allows populates label set strings from symbolized label set.
-func (r *bucketIndexReader) LookupLabelsSymbols(symbolized []symbolizedLabel, lbls *labels.Labels) error {
+func (r *bucketIndexReader) LookupLabelsSymbols(ctx context.Context, symbolized []symbolizedLabel, lbls *labels.Labels) error {
 	*lbls = (*lbls)[:0]
 	for _, s := range symbolized {
-		ln, err := r.dec.LookupSymbol(s.name)
+		ln, err := r.dec.LookupSymbol(ctx, s.name)
 		if err != nil {
 			return errors.Wrap(err, "lookup label name")
 		}
-		lv, err := r.dec.LookupSymbol(s.value)
+		lv, err := r.dec.LookupSymbol(ctx, s.value)
 		if err != nil {
 			return errors.Wrap(err, "lookup label value")
 		}

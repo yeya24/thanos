@@ -20,6 +20,7 @@
 package series
 
 import (
+	"github.com/prometheus/prometheus/util/annotations"
 	"sort"
 
 	"github.com/prometheus/common/model"
@@ -62,7 +63,7 @@ func (c *ConcreteSeriesSet) Err() error {
 }
 
 // Warnings implements storage.SeriesSet.
-func (c *ConcreteSeriesSet) Warnings() storage.Warnings {
+func (c *ConcreteSeriesSet) Warnings() annotations.Annotations {
 	return nil
 }
 

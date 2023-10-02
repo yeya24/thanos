@@ -72,7 +72,7 @@ func (s *mockedSeriesSet) At() storage.Series {
 }
 func (s *mockedSeriesSet) Err() error { return nil }
 
-func (s *mockedSeriesSet) Warnings() storage.Warnings { return nil }
+func (s *mockedSeriesSet) Warnings() annotations.Annotations { return nil }
 
 type mockedSeriesIterator struct {
 	cur     int
