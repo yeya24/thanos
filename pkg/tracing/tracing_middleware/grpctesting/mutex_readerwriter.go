@@ -1,3 +1,11 @@
+// Copyright (c) The Thanos Authors.
+// Licensed under the Apache License 2.0.
+
+/*
+This was copied over from https://github.com/grpc-ecosystem/go-grpc-middleware/tree/v2.0.0-rc.3
+and modified to support tracing in Thanos till migration to Otel is supported.
+*/
+
 package grpctesting
 
 import (
