@@ -48,6 +48,7 @@ We use *breaking :warning:* to mark changes that are not backward compatible (re
 
 ### Removed
 
+- [#6651](https://github.com/thanos-io/thanos/pull/6651) *: Update go_grpc_middleware to v2.0.0. `request-id` will not be added as a tag in grpc logging when `--request.logging` flag is enabled.
 ## [v0.32.3](https://github.com/thanos-io/thanos/tree/release-0.32) - 20.09.2023
 
 ### Fixed
