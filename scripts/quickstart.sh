@@ -147,11 +147,7 @@ fi
 
 # Start one sidecar for each Prometheus server.
 for i in $(seq 0 2); do
-  if [ -z ${CODESPACE_NAME+x} ]; then
-    PROMETHEUS_URL="http://localhost:909${i}"
-  else
-    PROMETHEUS_URL="https://${CODESPACE_NAME}-909${i}.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}"
-  fi
+  PROMETHEUS_URL="http://localhost:909${i}"
   ${THANOS_EXECUTABLE} sidecar \
     --debug.name sidecar-"${i}" \
     --log.level debug \
