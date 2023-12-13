@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-kit/log"
 	"github.com/mwitkow/go-conntrack"
+	"github.com/prometheus/client_golang/prometheus"
 	config_util "github.com/prometheus/common/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/common/version"
@@ -324,7 +325,7 @@ type Client struct {
 }
 
 // NewClient returns a new Client.
-func NewClient(logger log.Logger, cfg EndpointsConfig, client *http.Client, provider AddressProvider) (*Client, error) {
+func NewClient(logger log.Logger, cfg EndpointsConfig, client *http.Client, provider AddressProvider, reg prometheus.Registerer) (*Client, error) {
 	if logger == nil {
 		logger = log.NewNopLogger()
 	}
@@ -335,7 +336,11 @@ func NewClient(logger log.Logger, cfg EndpointsConfig, client *http.Client, prov
 		if err != nil {
 			return nil, err
 		}
-		discoverers = append(discoverers, file.NewDiscovery(&fileSDCfg, logger))
+		discoverer, err := file.NewDiscovery(&fileSDCfg, logger, reg)
+		if err != nil {
+			return nil, err
+		}
+		discoverers = append(discoverers, discoverer)
 	}
 	return &Client{
 		logger:          logger,

@@ -479,7 +479,7 @@ func runRule(
 		}
 		c.Transport = tracing.HTTPTripperware(logger, c.Transport)
 		// Each Alertmanager client has a different list of targets thus each needs its own DNS provider.
-		amClient, err := httpconfig.NewClient(logger, cfg.EndpointsConfig, c, amProvider.Clone())
+		amClient, err := httpconfig.NewClient(logger, cfg.EndpointsConfig, c, amProvider.Clone(), reg)
 		if err != nil {
 			return err
 		}
