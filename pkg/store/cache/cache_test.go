@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -59,7 +60,7 @@ func TestCacheKey_string(t *testing.T) {
 		"should stringify expanded postings cache key": {
 			key: CacheKey{ulidString, CacheKeyExpandedPostings(LabelMatchersToString([]*labels.Matcher{matcher})), ""},
 			expected: func() string {
-				hash := blake2b.Sum256([]byte(matcher.String()))
+				hash := blake2b.Sum256([]byte(matcher.Name + matcher.Type.String() + matcher.Value))
 				encodedHash := base64.RawURLEncoding.EncodeToString(hash[0:])
 
 				return fmt.Sprintf("EP:%s:%s", uid.String(), encodedHash)
@@ -68,7 +69,9 @@ func TestCacheKey_string(t *testing.T) {
 		"should stringify expanded postings cache key when multiple matchers": {
 			key: CacheKey{ulidString, CacheKeyExpandedPostings(LabelMatchersToString([]*labels.Matcher{matcher, matcher2})), ""},
 			expected: func() string {
-				hash := blake2b.Sum256([]byte(fmt.Sprintf("%s;%s", matcher.String(), matcher2.String())))
+				matcher1Str := matcher.Name + matcher.Type.String() + matcher.Value
+				matcher2Str := matcher2.Name + matcher2.Type.String() + matcher2.Value
+				hash := blake2b.Sum256([]byte(fmt.Sprintf("%s;%s", matcher1Str, matcher2Str)))
 				encodedHash := base64.RawURLEncoding.EncodeToString(hash[0:])
 
 				return fmt.Sprintf("EP:%s:%s", uid.String(), encodedHash)
@@ -77,7 +80,7 @@ func TestCacheKey_string(t *testing.T) {
 		"expanded postings cache key includes compression scheme": {
 			key: CacheKey{ulidString, CacheKeyExpandedPostings(LabelMatchersToString([]*labels.Matcher{matcher})), compressionSchemeStreamedSnappy},
 			expected: func() string {
-				hash := blake2b.Sum256([]byte(matcher.String()))
+				hash := blake2b.Sum256([]byte(matcher.Name + matcher.Type.String() + matcher.Value))
 				encodedHash := base64.RawURLEncoding.EncodeToString(hash[0:])
 
 				return fmt.Sprintf("EP:%s:%s:%s", uid.String(), encodedHash, compressionSchemeStreamedSnappy)
@@ -159,5 +162,16 @@ func BenchmarkCacheKey_string_Series(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = key.String()
+	}
+}
+
+func BenchmarkLabelMatchersToString(b *testing.B) {
+	matchers := make([]*labels.Matcher, 0, 10)
+	for i := 0; i < 10; i++ {
+		matchers = append(matchers, labels.MustNewMatcher(labels.MatchEqual, labels.MetricName, strconv.Itoa(i)))
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = LabelMatchersToString(matchers)
 	}
 }

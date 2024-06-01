@@ -164,7 +164,7 @@ func (c CacheKey) String() string {
 func LabelMatchersToString(matchers []*labels.Matcher) string {
 	sb := strings.Builder{}
 	for i, lbl := range matchers {
-		sb.WriteString(lbl.String())
+		sb.WriteString(lbl.Name + lbl.Type.String() + lbl.Value)
 		if i < len(matchers)-1 {
 			sb.WriteRune(';')
 		}
