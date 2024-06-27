@@ -68,6 +68,12 @@ import (
 
 var emptyRelabelConfig = make([]*relabel.Config, 0)
 
+func TestRawChunkReset(t *testing.T) {
+	r := rawChunk([]byte{1, 2})
+	r.Reset([]byte{3, 4})
+	testutil.Equals(t, []byte(r), []byte{3, 4})
+}
+
 func TestBucketBlock_Property(t *testing.T) {
 	parameters := gopter.DefaultTestParameters()
 	parameters.Rng.Seed(2000)
@@ -1191,7 +1197,7 @@ func uploadTestBlock(t testing.TB, tmpDir string, bkt objstore.Bucket, series in
 
 	dir := filepath.Join(tmpDir, "tmp")
 	testutil.Ok(t, os.MkdirAll(dir, os.ModePerm))
-	id := createBlockFromHead(t, dir, h)
+	id := storetestutil.CreateBlockFromHead(t, dir, h)
 	bdir := filepath.Join(dir, id.String())
 	meta, err := metadata.ReadFromDir(bdir)
 	testutil.Ok(t, err)
@@ -1230,18 +1236,6 @@ func appendTestData(t testing.TB, app storage.Appender, series int) {
 		}
 	}
 	testutil.Ok(t, app.Commit())
-}
-
-func createBlockFromHead(t testing.TB, dir string, head *tsdb.Head) ulid.ULID {
-	compactor, err := tsdb.NewLeveledCompactor(context.Background(), nil, log.NewNopLogger(), []int64{1000000}, nil, nil)
-	testutil.Ok(t, err)
-	testutil.Ok(t, os.MkdirAll(dir, 0777))
-
-	// Add +1 millisecond to block maxt because block intervals are half-open: [b.MinTime, b.MaxTime).
-	// Because of this block intervals are always +1 than the total samples it includes.
-	ulid, err := compactor.Write(dir, head, head.MinTime(), head.MaxTime()+1, nil)
-	testutil.Ok(t, err)
-	return ulid
 }
 
 // Very similar benchmark to ths: https://github.com/prometheus/prometheus/blob/1d1732bc25cc4b47f513cb98009a4eb91879f175/tsdb/querier_bench_test.go#L82,
@@ -1492,7 +1486,7 @@ func benchBucketSeries(t testutil.TB, sampleType chunkenc.ValueType, skipChunk, 
 			SkipChunks:       t.IsBenchmark() || skipChunk,
 			SampleType:       sampleType,
 		})
-		id := createBlockFromHead(t, blockDir, head)
+		id := storetestutil.CreateBlockFromHead(t, blockDir, head)
 		testutil.Ok(t, head.Close())
 		blockIDDir := filepath.Join(blockDir, id.String())
 		meta, err := metadata.ReadFromDir(blockIDDir)
@@ -1709,7 +1703,7 @@ func TestBucketSeries_OneBlock_InMemIndexCacheSegfault(t *testing.T) {
 		testutil.Ok(t, app.Commit())
 
 		blockDir := filepath.Join(tmpDir, "tmp")
-		id := createBlockFromHead(t, blockDir, h)
+		id := storetestutil.CreateBlockFromHead(t, blockDir, h)
 
 		meta, err := metadata.InjectThanos(log.NewNopLogger(), filepath.Join(blockDir, id.String()), thanosMeta, nil)
 		testutil.Ok(t, err)
@@ -1749,7 +1743,7 @@ func TestBucketSeries_OneBlock_InMemIndexCacheSegfault(t *testing.T) {
 		testutil.Ok(t, app.Commit())
 
 		blockDir := filepath.Join(tmpDir, "tmp2")
-		id := createBlockFromHead(t, blockDir, h)
+		id := storetestutil.CreateBlockFromHead(t, blockDir, h)
 
 		meta, err := metadata.InjectThanos(log.NewNopLogger(), filepath.Join(blockDir, id.String()), thanosMeta, nil)
 		testutil.Ok(t, err)
@@ -2043,7 +2037,7 @@ func TestSeries_BlockWithMultipleChunks(t *testing.T) {
 		testutil.Ok(t, app.Commit())
 	}
 
-	blk := createBlockFromHead(t, headOpts.ChunkDirRoot, h)
+	blk := storetestutil.CreateBlockFromHead(t, headOpts.ChunkDirRoot, h)
 
 	thanosMeta := metadata.Thanos{
 		Labels:     labels.FromStrings("ext1", "1").Map(),
@@ -2356,7 +2350,7 @@ func createBlockWithOneSeriesWithStep(t testutil.TB, dir string, lbls labels.Lab
 	}
 	testutil.Ok(t, app.Commit())
 
-	return createBlockFromHead(t, dir, h)
+	return storetestutil.CreateBlockFromHead(t, dir, h)
 }
 
 func setupStoreForHintsTest(t *testing.T) (testutil.TB, *BucketStore, []*storepb.Series, []*storepb.Series, ulid.ULID, ulid.ULID, func()) {
@@ -2393,7 +2387,7 @@ func setupStoreForHintsTest(t *testing.T) (testutil.TB, *BucketStore, []*storepb
 		PrependLabels:    extLset,
 		Random:           random,
 	})
-	block1 := createBlockFromHead(t, bktDir, head)
+	block1 := storetestutil.CreateBlockFromHead(t, bktDir, head)
 	testutil.Ok(t, head.Close())
 	head2, seriesSet2 := storetestutil.CreateHeadWithSeries(t, 1, storetestutil.HeadGenOptions{
 		TSDBDir:          filepath.Join(tmpDir, "1"),
@@ -2402,7 +2396,7 @@ func setupStoreForHintsTest(t *testing.T) (testutil.TB, *BucketStore, []*storepb
 		PrependLabels:    extLset,
 		Random:           random,
 	})
-	block2 := createBlockFromHead(t, bktDir, head2)
+	block2 := storetestutil.CreateBlockFromHead(t, bktDir, head2)
 	testutil.Ok(t, head2.Close())
 
 	for _, blockID := range []ulid.ULID{block1, block2} {
@@ -2606,7 +2600,7 @@ func TestSeries_ChunksHaveHashRepresentation(t *testing.T) {
 	}
 	testutil.Ok(t, app.Commit())
 
-	blk := createBlockFromHead(t, headOpts.ChunkDirRoot, h)
+	blk := storetestutil.CreateBlockFromHead(t, headOpts.ChunkDirRoot, h)
 
 	thanosMeta := metadata.Thanos{
 		Labels:     labels.FromStrings("ext1", "1").Map(),
@@ -2805,7 +2799,7 @@ func prepareBucket(b *testing.B, resolutionLevel compact.ResolutionLevel) (*buck
 		Random:           rand.New(rand.NewSource(120)),
 		SkipChunks:       true,
 	})
-	blockID := createBlockFromHead(b, tmpDir, head)
+	blockID := storetestutil.CreateBlockFromHead(b, tmpDir, head)
 
 	// Upload the block to the bucket.
 	thanosMeta := metadata.Thanos{
@@ -3470,7 +3464,7 @@ func TestExpandedPostingsRace(t *testing.T) {
 		Random:           rand.New(rand.NewSource(120)),
 		SkipChunks:       true,
 	})
-	blockID := createBlockFromHead(t, tmpDir, head)
+	blockID := storetestutil.CreateBlockFromHead(t, tmpDir, head)
 
 	bucketBlocks := make([]*bucketBlock, 0, blockCount)
 
@@ -3606,7 +3600,7 @@ func TestBucketStoreDedupOnBlockSeriesSet(t *testing.T) {
 		testutil.Ok(t, err)
 		testutil.Ok(t, app.Commit())
 
-		id := createBlockFromHead(t, auxDir, h)
+		id := storetestutil.CreateBlockFromHead(t, auxDir, h)
 
 		auxBlockDir := filepath.Join(auxDir, id.String())
 		_, err = metadata.InjectThanos(log.NewNopLogger(), auxBlockDir, metadata.Thanos{
@@ -3825,7 +3819,7 @@ func TestBucketStoreStreamingSeriesLimit(t *testing.T) {
 	testutil.Ok(t, err)
 	testutil.Ok(t, app.Commit())
 
-	id := createBlockFromHead(t, auxDir, h)
+	id := storetestutil.CreateBlockFromHead(t, auxDir, h)
 
 	auxBlockDir := filepath.Join(auxDir, id.String())
 	_, err = metadata.InjectThanos(log.NewNopLogger(), auxBlockDir, metadata.Thanos{
@@ -3846,6 +3840,9 @@ func TestBucketStoreStreamingSeriesLimit(t *testing.T) {
 	})
 	testutil.Ok(t, err)
 
+	firstBytesLimiterChecked := false
+	secondBytesLimiterChecked := false
+
 	// Set series limit to 2. Only pass if series limiter applies
 	// for lazy postings only.
 	bucketStore, err := NewBucketStore(
@@ -3854,7 +3851,24 @@ func TestBucketStoreStreamingSeriesLimit(t *testing.T) {
 		"",
 		NewChunksLimiterFactory(10e6),
 		NewSeriesLimiterFactory(2),
-		NewBytesLimiterFactory(10e6),
+		func(_ prometheus.Counter) BytesLimiter {
+			return &compositeBytesLimiterMock{
+				limiters: []BytesLimiter{
+					&bytesLimiterMock{
+						limitFunc: func(_ uint64, _ StoreDataType) error {
+							firstBytesLimiterChecked = true
+							return nil
+						},
+					},
+					&bytesLimiterMock{
+						limitFunc: func(_ uint64, _ StoreDataType) error {
+							secondBytesLimiterChecked = true
+							return nil
+						},
+					},
+				},
+			}
+		},
 		NewGapBasedPartitioner(PartitionerMaxGapSize),
 		20,
 		true,
@@ -3885,4 +3899,27 @@ func TestBucketStoreStreamingSeriesLimit(t *testing.T) {
 	srv := newStoreSeriesServer(context.Background())
 	testutil.Ok(t, bucketStore.Series(req, srv))
 	testutil.Equals(t, 2, len(srv.SeriesSet))
+	testutil.Equals(t, true, firstBytesLimiterChecked)
+	testutil.Equals(t, true, secondBytesLimiterChecked)
+}
+
+type bytesLimiterMock struct {
+	limitFunc func(uint64, StoreDataType) error
+}
+
+func (m *bytesLimiterMock) ReserveWithType(num uint64, dataType StoreDataType) error {
+	return m.limitFunc(num, dataType)
+}
+
+type compositeBytesLimiterMock struct {
+	limiters []BytesLimiter
+}
+
+func (m *compositeBytesLimiterMock) ReserveWithType(num uint64, dataType StoreDataType) error {
+	for _, l := range m.limiters {
+		if err := l.ReserveWithType(num, dataType); err != nil {
+			return err
+		}
+	}
+	return nil
 }
