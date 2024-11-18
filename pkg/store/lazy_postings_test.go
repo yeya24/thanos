@@ -555,6 +555,29 @@ func TestOptimizePostingsFetchByDownloadedBytes(t *testing.T) {
 				{name: "cluster", addKeys: []string{"us"}, cardinality: 250000, lazy: true},
 			},
 		},
+		{
+			name: "test test",
+			inputPostings: map[string]map[string]index.Range{
+				"__name__":  {"container_memory_working_set_bytes": index.Range{End: 209328}},
+				"namespace": {"migration": index.Range{Start: 209328, End: 258236}},
+				"pod":       {"test": index.Range{Start: 258236, End: 7757908}},
+				"host_env":  {"prod": index.Range{Start: 7757908, End: 88133268}},
+			},
+			seriesMaxSize:    20000,
+			seriesMatchRatio: 0.1,
+			postingGroups: []*postingGroup{
+				{name: "__name__", addKeys: []string{"container_memory_working_set_bytes"}},
+				{name: "namespace", addKeys: []string{"migration"}},
+				{name: "pod", addKeys: []string{"test"}},
+				{name: "host_env", addKeys: []string{"prod"}},
+			},
+			expectedPostingGroups: []*postingGroup{
+				{name: "namespace", addKeys: []string{"migration"}, cardinality: 12226},
+				{name: "__name__", addKeys: []string{"container_memory_working_set_bytes"}, cardinality: 52331},
+				{name: "pod", addKeys: []string{"test"}, cardinality: 1874917},
+				{name: "host_env", addKeys: []string{"prod"}, cardinality: 20093839, lazy: true},
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			headerReader := &mockIndexHeaderReader{postings: tc.inputPostings, err: tc.inputError}
