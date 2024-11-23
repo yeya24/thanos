@@ -130,6 +130,7 @@ require github.com/dgryski/go-metro v0.0.0-20200812162917-85c65e2d0165 // indire
 require (
 	cloud.google.com/go/auth v0.9.3 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.4 // indirect
+	github.com/DataDog/sketches-go v1.4.6 // indirect
 	github.com/HdrHistogram/hdrhistogram-go v1.1.2 // indirect
 	github.com/bboreham/go-loser v0.0.0-20230920113527-fcc2c21820a3 // indirect
 	github.com/cilium/ebpf v0.11.0 // indirect

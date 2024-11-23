@@ -108,6 +108,16 @@ type bucketVerifyConfig struct {
 	issuesToVerify []string
 }
 
+type bucketAnalyzeConfig struct {
+	id string
+}
+
+func (tbc *bucketAnalyzeConfig) registerBucketAnalyzeFlag(cmd extkingpin.FlagClause) *bucketAnalyzeConfig {
+	cmd.Flag("id", "Block IDs to verify (and optionally repair) only. "+
+		"If none is specified, all blocks will be verified. Repeated field").StringVar(&tbc.id)
+	return tbc
+}
+
 type bucketLsConfig struct {
 	output        string
 	excludeDelete bool
@@ -306,6 +316,37 @@ func registerBucket(app extkingpin.AppClause) {
 	registerBucketRewrite(cmd, objStoreConfig)
 	registerBucketRetention(cmd, objStoreConfig)
 	registerBucketUploadBlocks(cmd, objStoreConfig)
+	registerBucketAnalyze(cmd)
+}
+
+func registerBucketAnalyze(app extkingpin.AppClause) {
+	cmd := app.Command("analyze", "Verify all blocks in the bucket against specified issues. NOTE: Depending on issue this might take time and will need downloading all specified blocks to disk.")
+
+	ctx := context.Background()
+	tbc := &bucketAnalyzeConfig{}
+	tbc.registerBucketAnalyzeFlag(cmd)
+	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ <-chan struct{}, _ bool) error {
+		meta, err := metadata.ReadFromDir(tbc.id)
+		if err != nil {
+			return err
+		}
+		fn := filepath.Join(tbc.id, "index")
+		stats, err := block.GatherIndexHealthStats(ctx, logger, fn, meta.MinTime, meta.MaxTime)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("series max size: %d\n", stats.SeriesMaxSize)
+		fmt.Printf("series min size: %d\n", stats.SeriesMinSize)
+		fmt.Printf("series avg size: %d\n", stats.SeriesAvgSize)
+		fmt.Printf("series p75 size: %d\n", stats.SeriesP75Size)
+		fmt.Printf("series p90 size: %d\n", stats.SeriesP90Size)
+		fmt.Printf("series p99 size: %d\n", stats.SeriesP99Size)
+		fmt.Println(stats)
+		// Dummy actor to immediately kill the group after the run function returns.
+		g.Add(func() error { return nil }, func(error) {})
+
+		return nil
+	})
 }
 
 func registerBucketVerify(app extkingpin.AppClause, objStoreConfig *extflag.PathOrContent) {
