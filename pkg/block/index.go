@@ -213,6 +213,48 @@ func (n *minMaxSumInt64) Avg() int64 {
 	return n.sum / n.cnt
 }
 
+type sketch struct {
+	cnt int64
+	s   *ddsketch.DDSketch
+}
+
+func newSketch() *sketch {
+	dd, _ := ddsketch.NewDefaultDDSketch(0.01)
+	return &sketch{s: dd}
+}
+
+func (s *sketch) Add(v int64) {
+	s.cnt++
+	s.s.Add(float64(v))
+}
+func (s *sketch) Avg() int64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	return int64(s.s.GetSum()) / s.cnt
+}
+func (s *sketch) Max() int64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	v, _ := s.s.GetMaxValue()
+	return int64(v)
+}
+func (s *sketch) Min() int64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	v, _ := s.s.GetMinValue()
+	return int64(v)
+}
+func (s *sketch) Quantile(quantile float64) int64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	v, _ := s.s.GetValueAtQuantile(quantile)
+	return int64(v)
+}
+
 // GatherIndexHealthStats returns useful counters as well as outsider chunks (chunks outside of block time range) that
 // helps to assess index health.
 // It considers https://github.com/prometheus/tsdb/issues/347 as something that Thanos can handle.
