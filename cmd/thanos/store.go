@@ -74,6 +74,7 @@ type storeConfig struct {
 	indexCacheSizeBytes         units.Base2Bytes
 	chunkPoolSize               units.Base2Bytes
 	estimatedMaxSeriesSize      uint64
+	estimatedSeriesSizeStrategy string
 	estimatedMaxChunkSize       uint64
 	seriesBatchSize             int
 	storeRateLimits             store.SeriesSelectLimits
@@ -161,6 +162,10 @@ func (sc *storeConfig) registerFlag(cmd extkingpin.FlagClause) {
 
 	cmd.Flag("debug.estimated-max-series-size", "Estimated max series size. Setting a value might result in over fetching data while a small value might result in data refetch. Default value is 64KB.").
 		Hidden().Default(strconv.Itoa(store.EstimatedMaxSeriesSize)).Uint64Var(&sc.estimatedMaxSeriesSize)
+
+	cmd.Flag("debug.estimated-series-size-strategy", "Strategy of choosing  Default value is 64KB.").
+		Hidden().Default(string(store.BlockSeriesSizeMax)).
+		EnumVar(&sc.estimatedSeriesSizeStrategy, string(store.BlockSeriesSizeMax), string(store.BlockSeriesSizeP99), string(store.BlockSeriesSizeP999), string(store.BlockSeriesSizeP9999))
 
 	cmd.Flag("debug.estimated-max-chunk-size", "Estimated max chunk size. Setting a value might result in over fetching data while a small value might result in data refetch. Default value is 16KiB.").
 		Hidden().Default(strconv.Itoa(store.EstimatedMaxChunkSize)).Uint64Var(&sc.estimatedMaxChunkSize)
@@ -393,6 +398,8 @@ func runStore(
 		return errors.Wrap(err, "create chunk pool")
 	}
 
+	estimatedSeriesSizeStrategy := strings.ToLower(conf.estimatedSeriesSizeStrategy)
+
 	options := []store.BucketStoreOption{
 		store.WithLogger(logger),
 		store.WithRequestLoggerFunc(func(ctx context.Context, logger log.Logger) log.Logger {
@@ -414,6 +421,37 @@ func runStore(
 				uint64(m.Thanos.IndexStats.SeriesMaxSize) < conf.estimatedMaxSeriesSize {
 				return uint64(m.Thanos.IndexStats.SeriesMaxSize)
 			}
+			return conf.estimatedMaxSeriesSize
+		}),
+		store.WithBlockEstimatedSeriesSizeFunc(func(m metadata.Meta) uint64 {
+			switch estimatedSeriesSizeStrategy {
+			case string(store.BlockSeriesSizeMax):
+				if m.Thanos.IndexStats.SeriesMaxSize > 0 {
+					return uint64(m.Thanos.IndexStats.SeriesMaxSize)
+				}
+			case string(store.BlockSeriesSizeP90):
+				if m.Thanos.IndexStats.SeriesP90Size > 0 {
+					return uint64(m.Thanos.IndexStats.SeriesP90Size)
+				}
+			case string(store.BlockSeriesSizeP99):
+				if m.Thanos.IndexStats.SeriesP99Size > 0 {
+					return uint64(m.Thanos.IndexStats.SeriesP99Size)
+				}
+			case string(store.BlockSeriesSizeP999):
+				if m.Thanos.IndexStats.SeriesP999Size > 0 {
+					return uint64(m.Thanos.IndexStats.SeriesP999Size)
+				}
+			case string(store.BlockSeriesSizeP9999):
+				if m.Thanos.IndexStats.SeriesP9999Size > 0 {
+					return uint64(m.Thanos.IndexStats.SeriesP9999Size)
+				}
+			}
+
+			// Always fallback to series max size if none of other stats available.
+			if m.Thanos.IndexStats.SeriesMaxSize > 0 {
+				return uint64(m.Thanos.IndexStats.SeriesMaxSize)
+			}
+			// If series max size not available from the metadata, fallback to the configured default.
 			return conf.estimatedMaxSeriesSize
 		}),
 		store.WithBlockEstimatedMaxChunkFunc(func(m metadata.Meta) uint64 {

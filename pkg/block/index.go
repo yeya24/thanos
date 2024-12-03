@@ -85,9 +85,13 @@ type HealthStats struct {
 	ChunkAvgSize int64
 	ChunkMaxSize int64
 
-	SeriesMinSize int64
-	SeriesAvgSize int64
-	SeriesMaxSize int64
+	SeriesMinSize   int64
+	SeriesAvgSize   int64
+	SeriesMaxSize   int64
+	SeriesP9999Size int64
+	SeriesP999Size  int64
+	SeriesP99Size   int64
+	SeriesP90Size   int64
 
 	SingleSampleSeries int64
 	SingleSampleChunks int64
@@ -207,6 +211,48 @@ func (n *minMaxSumInt64) Avg() int64 {
 		return 0
 	}
 	return n.sum / n.cnt
+}
+
+type sketch struct {
+	cnt int64
+	s   *ddsketch.DDSketch
+}
+
+func newSketch() *sketch {
+	dd, _ := ddsketch.NewDefaultDDSketch(0.01)
+	return &sketch{s: dd}
+}
+
+func (s *sketch) Add(v int64) {
+	s.cnt++
+	s.s.Add(float64(v))
+}
+func (s *sketch) Avg() int64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	return int64(s.s.GetSum()) / s.cnt
+}
+func (s *sketch) Max() int64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	v, _ := s.s.GetMaxValue()
+	return int64(v)
+}
+func (s *sketch) Min() int64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	v, _ := s.s.GetMinValue()
+	return int64(v)
+}
+func (s *sketch) Quantile(quantile float64) int64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	v, _ := s.s.GetValueAtQuantile(quantile)
+	return int64(v)
 }
 
 // GatherIndexHealthStats returns useful counters as well as outsider chunks (chunks outside of block time range) that
@@ -393,7 +439,11 @@ func GatherIndexHealthStats(ctx context.Context, logger log.Logger, fn string, m
 
 	stats.SeriesMaxSize = seriesSize.max
 	stats.SeriesAvgSize = seriesSize.Avg()
-	stats.SeriesMinSize = seriesSize.min
+	stats.SeriesMinSize = seriesSize.Min()
+	stats.SeriesP99Size = seriesSize.Quantile(0.9999)
+	stats.SeriesP99Size = seriesSize.Quantile(0.999)
+	stats.SeriesP99Size = seriesSize.Quantile(0.99)
+	stats.SeriesP90Size = seriesSize.Quantile(0.90)
 
 	stats.ChunkMaxDuration = time.Duration(chunkDuration.max) * time.Millisecond
 	stats.ChunkAvgDuration = time.Duration(chunkDuration.Avg()) * time.Millisecond
