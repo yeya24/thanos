@@ -86,12 +86,13 @@ type HealthStats struct {
 	ChunkAvgSize int64
 	ChunkMaxSize int64
 
-	SeriesMinSize int64
-	SeriesAvgSize int64
-	SeriesMaxSize int64
-	SeriesP99Size int64
-	SeriesP90Size int64
-	SeriesP75Size int64
+	SeriesMinSize   int64
+	SeriesAvgSize   int64
+	SeriesMaxSize   int64
+	SeriesP9999Size int64
+	SeriesP999Size  int64
+	SeriesP99Size   int64
+	SeriesP90Size   int64
 
 	SingleSampleSeries int64
 	SingleSampleChunks int64
@@ -444,9 +445,10 @@ func GatherIndexHealthStats(ctx context.Context, logger log.Logger, fn string, m
 	stats.SeriesMaxSize = seriesSize.Max()
 	stats.SeriesAvgSize = seriesSize.Avg()
 	stats.SeriesMinSize = seriesSize.Min()
+	stats.SeriesP99Size = seriesSize.Quantile(0.9999)
+	stats.SeriesP99Size = seriesSize.Quantile(0.999)
 	stats.SeriesP99Size = seriesSize.Quantile(0.99)
 	stats.SeriesP90Size = seriesSize.Quantile(0.90)
-	stats.SeriesP75Size = seriesSize.Quantile(0.75)
 
 	stats.ChunkMaxDuration = time.Duration(chunkDuration.max) * time.Millisecond
 	stats.ChunkAvgDuration = time.Duration(chunkDuration.Avg()) * time.Millisecond
