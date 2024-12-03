@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/DataDog/sketches-go/ddsketch"
+	"github.com/caio/go-tdigest"
 	"hash/crc32"
 	"math"
 	"math/rand"
@@ -86,13 +87,16 @@ type HealthStats struct {
 	ChunkAvgSize int64
 	ChunkMaxSize int64
 
-	SeriesMinSize   int64
-	SeriesAvgSize   int64
-	SeriesMaxSize   int64
-	SeriesP9999Size int64
-	SeriesP999Size  int64
-	SeriesP99Size   int64
-	SeriesP90Size   int64
+	SeriesMinSize      int64
+	SeriesAvgSize      int64
+	SeriesMaxSize      int64
+	SeriesP9999999Size int64
+	SeriesP999999Size  int64
+	SeriesP99999Size   int64
+	SeriesP9999Size    int64
+	SeriesP999Size     int64
+	SeriesP99Size      int64
+	SeriesP90Size      int64
 
 	SingleSampleSeries int64
 	SingleSampleChunks int64
@@ -214,6 +218,25 @@ func (n *minMaxSumInt64) Avg() int64 {
 	return n.sum / n.cnt
 }
 
+type sketch2 struct {
+	minMaxSumInt64
+	t *tdigest.TDigest
+}
+
+func newSketch2() *sketch2 {
+	t, _ := tdigest.New()
+	return &sketch2{t: t, minMaxSumInt64: newMinMaxSumInt64()}
+}
+
+func (s *sketch2) Add(v int64) {
+	s.minMaxSumInt64.Add(v)
+	s.t.Add(float64(v))
+}
+
+func (s *sketch2) Quantile(quantile float64) int64 {
+	return int64(s.t.Quantile(quantile))
+}
+
 type sketch struct {
 	cnt int64
 	s   *ddsketch.DDSketch
@@ -288,7 +311,7 @@ func GatherIndexHealthStats(ctx context.Context, logger log.Logger, fn string, m
 		seriesChunks                                = newMinMaxSumInt64()
 		chunkDuration                               = newMinMaxSumInt64()
 		chunkSize                                   = newMinMaxSumInt64()
-		seriesSize                                  = newSketch()
+		seriesSize                                  = newSketch2()
 	)
 
 	lnames, err := r.LabelNames(ctx)
@@ -442,11 +465,14 @@ func GatherIndexHealthStats(ctx context.Context, logger log.Logger, fn string, m
 	stats.ChunkAvgSize = chunkSize.Avg()
 	stats.ChunkMinSize = chunkSize.min
 
-	stats.SeriesMaxSize = seriesSize.Max()
+	stats.SeriesMaxSize = seriesSize.max
 	stats.SeriesAvgSize = seriesSize.Avg()
-	stats.SeriesMinSize = seriesSize.Min()
-	stats.SeriesP99Size = seriesSize.Quantile(0.9999)
-	stats.SeriesP99Size = seriesSize.Quantile(0.999)
+	stats.SeriesMinSize = seriesSize.min
+	stats.SeriesP9999999Size = seriesSize.Quantile(0.9999999)
+	stats.SeriesP999999Size = seriesSize.Quantile(0.999999)
+	stats.SeriesP99999Size = seriesSize.Quantile(0.99999)
+	stats.SeriesP9999Size = seriesSize.Quantile(0.9999)
+	stats.SeriesP999Size = seriesSize.Quantile(0.999)
 	stats.SeriesP99Size = seriesSize.Quantile(0.99)
 	stats.SeriesP90Size = seriesSize.Quantile(0.90)
 
