@@ -112,6 +112,7 @@ require (
 )
 
 require (
+	github.com/DataDog/sketches-go v1.4.6
 	github.com/cortexproject/promqlsmith v0.0.0-20240506042652-6cfdd9739a5e
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.0.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7

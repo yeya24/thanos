@@ -74,7 +74,7 @@ type storeConfig struct {
 	indexCacheSizeBytes         units.Base2Bytes
 	chunkPoolSize               units.Base2Bytes
 	estimatedMaxSeriesSize      uint64
-	estimatedSeriesSizeStrategy string
+	estimatedSeriesSizeStats    string
 	estimatedMaxChunkSize       uint64
 	seriesBatchSize             int
 	storeRateLimits             store.SeriesSelectLimits
@@ -163,9 +163,9 @@ func (sc *storeConfig) registerFlag(cmd extkingpin.FlagClause) {
 	cmd.Flag("debug.estimated-max-series-size", "Estimated max series size. Setting a value might result in over fetching data while a small value might result in data refetch. Default value is 64KB.").
 		Hidden().Default(strconv.Itoa(store.EstimatedMaxSeriesSize)).Uint64Var(&sc.estimatedMaxSeriesSize)
 
-	cmd.Flag("debug.estimated-series-size-strategy", "Strategy of choosing  Default value is 64KB.").
-		Hidden().Default(string(store.BlockSeriesSizeMax)).
-		EnumVar(&sc.estimatedSeriesSizeStrategy, string(store.BlockSeriesSizeMax), string(store.BlockSeriesSizeP99), string(store.BlockSeriesSizeP999), string(store.BlockSeriesSizeP9999))
+	cmd.Flag("estimated-series-size-stats", "Stats to use for estimated block series size. This is currently used for lazy expanded posting series size estimation. Available options are max, p90, p99, p999 and p9999. Default value is "+string(store.BlockSeriesSizeMax)).
+		Default(string(store.BlockSeriesSizeMax)).
+		EnumVar(&sc.estimatedSeriesSizeStats, string(store.BlockSeriesSizeMax), string(store.BlockSeriesSizeP99), string(store.BlockSeriesSizeP999), string(store.BlockSeriesSizeP9999))
 
 	cmd.Flag("debug.estimated-max-chunk-size", "Estimated max chunk size. Setting a value might result in over fetching data while a small value might result in data refetch. Default value is 16KiB.").
 		Hidden().Default(strconv.Itoa(store.EstimatedMaxChunkSize)).Uint64Var(&sc.estimatedMaxChunkSize)
@@ -398,7 +398,7 @@ func runStore(
 		return errors.Wrap(err, "create chunk pool")
 	}
 
-	estimatedSeriesSizeStrategy := strings.ToLower(conf.estimatedSeriesSizeStrategy)
+	estimatedSeriesSizeStats := strings.ToLower(conf.estimatedSeriesSizeStats)
 
 	options := []store.BucketStoreOption{
 		store.WithLogger(logger),
@@ -424,7 +424,7 @@ func runStore(
 			return conf.estimatedMaxSeriesSize
 		}),
 		store.WithBlockEstimatedSeriesSizeFunc(func(m metadata.Meta) uint64 {
-			switch estimatedSeriesSizeStrategy {
+			switch estimatedSeriesSizeStats {
 			case string(store.BlockSeriesSizeMax):
 				if m.Thanos.IndexStats.SeriesMaxSize > 0 {
 					return uint64(m.Thanos.IndexStats.SeriesMaxSize)
