@@ -345,6 +345,7 @@ func registerBucketAnalyze(app extkingpin.AppClause) {
 		fmt.Printf("series p99999 size: %d\n", stats.SeriesP99999Size)
 		fmt.Printf("series p999999 size: %d\n", stats.SeriesP999999Size)
 		fmt.Printf("series p9999999 size: %d\n", stats.SeriesP9999999Size)
+		fmt.Printf("series size stddev: %.2f\n", stats.SeriesSizeStddev)
 		fmt.Println(stats)
 		// Dummy actor to immediately kill the group after the run function returns.
 		g.Add(func() error { return nil }, func(error) {})

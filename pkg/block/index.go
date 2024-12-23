@@ -97,6 +97,7 @@ type HealthStats struct {
 	SeriesP999Size     int64
 	SeriesP99Size      int64
 	SeriesP90Size      int64
+	SeriesSizeStddev   float64
 
 	SingleSampleSeries int64
 	SingleSampleChunks int64
@@ -238,8 +239,9 @@ func (s *sketch2) Quantile(quantile float64) int64 {
 }
 
 type sketch struct {
-	cnt int64
-	s   *ddsketch.DDSketch
+	cnt       int64
+	sum, sum2 int64
+	s         *ddsketch.DDSketch
 }
 
 func newSketch() *sketch {
@@ -283,6 +285,18 @@ func (s *sketch) Quantile(quantile float64) int64 {
 	return int64(v)
 }
 
+func (s *sketch) StdDev() float64 {
+	if s.cnt == 0 {
+		return 0
+	}
+	mean := s.sum / s.cnt
+	return math.Sqrt(float64(s.sum2/s.cnt - mean*mean))
+}
+
+func (s *sketch) ZScore(z float64) int64 {
+	return int64(s.StdDev()*z) + s.Avg()
+}
+
 // GatherIndexHealthStats returns useful counters as well as outsider chunks (chunks outside of block time range) that
 // helps to assess index health.
 // It considers https://github.com/prometheus/tsdb/issues/347 as something that Thanos can handle.
@@ -311,7 +325,7 @@ func GatherIndexHealthStats(ctx context.Context, logger log.Logger, fn string, m
 		seriesChunks                                = newMinMaxSumInt64()
 		chunkDuration                               = newMinMaxSumInt64()
 		chunkSize                                   = newMinMaxSumInt64()
-		seriesSize                                  = newSketch2()
+		seriesSize                                  = newSketch()
 	)
 
 	lnames, err := r.LabelNames(ctx)
@@ -465,9 +479,9 @@ func GatherIndexHealthStats(ctx context.Context, logger log.Logger, fn string, m
 	stats.ChunkAvgSize = chunkSize.Avg()
 	stats.ChunkMinSize = chunkSize.min
 
-	stats.SeriesMaxSize = seriesSize.max
+	stats.SeriesMaxSize = seriesSize.Max()
 	stats.SeriesAvgSize = seriesSize.Avg()
-	stats.SeriesMinSize = seriesSize.min
+	stats.SeriesMinSize = seriesSize.Min()
 	stats.SeriesP9999999Size = seriesSize.Quantile(0.9999999)
 	stats.SeriesP999999Size = seriesSize.Quantile(0.999999)
 	stats.SeriesP99999Size = seriesSize.Quantile(0.99999)
@@ -475,6 +489,7 @@ func GatherIndexHealthStats(ctx context.Context, logger log.Logger, fn string, m
 	stats.SeriesP999Size = seriesSize.Quantile(0.999)
 	stats.SeriesP99Size = seriesSize.Quantile(0.99)
 	stats.SeriesP90Size = seriesSize.Quantile(0.90)
+	stats.SeriesSizeStddev = seriesSize.StdDev()
 
 	stats.ChunkMaxDuration = time.Duration(chunkDuration.max) * time.Millisecond
 	stats.ChunkAvgDuration = time.Duration(chunkDuration.Avg()) * time.Millisecond
