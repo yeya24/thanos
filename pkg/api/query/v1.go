@@ -83,6 +83,9 @@ const (
 	RuleNameParam            = "rule_name[]"
 	RuleGroupParam           = "rule_group[]"
 	FileParam                = "file[]"
+	SelectorBatchSizeParam   = "selector_batch_size"
+	StepsBatchSizeParam      = "steps_batch_size"
+	DecodingConcurrencyParam = "decoding_concurrency"
 )
 
 // QueryAPI is an API used by Thanos Querier.
@@ -256,9 +259,45 @@ type queryTelemetry struct {
 	// TODO(saswatamcode): Add aggregate fields to enrich data.
 	OperatorName string           `json:"name,omitempty"`
 	Execution    string           `json:"executionTime,omitempty"`
+	SeriesTime   string           `json:"seriesExecutionTime,omitempty"`
+	NextTime     string           `json:"samplesExecutionTime,omitempty"`
 	PeakSamples  int64            `json:"peakSamples,omitempty"`
 	TotalSamples int64            `json:"totalSamples,omitempty"`
+	Series       int64            `json:"series,omitempty"`
 	Children     []queryTelemetry `json:"children,omitempty"`
+}
+
+func (qapi *QueryAPI) parseDecodingConcurrency(r *http.Request) (int64, *api.ApiError) {
+	if val := r.FormValue(DecodingConcurrencyParam); val != "" {
+		size, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			return size, &api.ApiError{Typ: api.ErrorBadData, Err: errors.Wrapf(err, "'%s' parameter", DecodingConcurrencyParam)}
+		}
+		return size, nil
+	}
+	return 0, nil
+}
+
+func (qapi *QueryAPI) parseSelectorBatchSize(r *http.Request) (int64, *api.ApiError) {
+	if val := r.FormValue(SelectorBatchSizeParam); val != "" {
+		size, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			return size, &api.ApiError{Typ: api.ErrorBadData, Err: errors.Wrapf(err, "'%s' parameter", SelectorBatchSizeParam)}
+		}
+		return size, nil
+	}
+	return 0, nil
+}
+
+func (qapi *QueryAPI) parseStepsBatchSize(r *http.Request) (int64, *api.ApiError) {
+	if val := r.FormValue(StepsBatchSizeParam); val != "" {
+		size, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			return size, &api.ApiError{Typ: api.ErrorBadData, Err: errors.Wrapf(err, "'%s' parameter", StepsBatchSizeParam)}
+		}
+		return size, nil
+	}
+	return 0, nil
 }
 
 func (qapi *QueryAPI) parseEnableDedupParam(r *http.Request) (enableDeduplication bool, _ *api.ApiError) {
@@ -424,8 +463,11 @@ func processAnalysis(a *engine.AnalyzeOutputNode) queryTelemetry {
 	var analysis queryTelemetry
 	analysis.OperatorName = a.OperatorTelemetry.String()
 	analysis.Execution = a.OperatorTelemetry.ExecutionTimeTaken().String()
+	analysis.SeriesTime = a.OperatorTelemetry.SeriesExecutionTime().String()
+	analysis.NextTime = a.OperatorTelemetry.NextExecutionTime().String()
 	analysis.PeakSamples = a.PeakSamples()
 	analysis.TotalSamples = a.TotalSamples()
+	analysis.Series = a.OperatorTelemetry.SeriesCount()
 	for _, c := range a.Children {
 		analysis.Children = append(analysis.Children, processAnalysis(c))
 	}
@@ -458,6 +500,21 @@ func (qapi *QueryAPI) queryExplain(r *http.Request) (interface{}, []error, *api.
 
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
+	}
+
+	stepsBatchSize, apiErr := qapi.parseStepsBatchSize(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
+	decodingConcurrency, apiErr := qapi.parseDecodingConcurrency(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
+	selectorBatchSize, apiErr := qapi.parseSelectorBatchSize(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
 	}
 
 	enableDedup, apiErr := qapi.parseEnableDedupParam(r)
@@ -526,6 +583,15 @@ func (qapi *QueryAPI) queryExplain(r *http.Request) (interface{}, []error, *api.
 		queryOpts := &engine.QueryOpts{
 			LookbackDeltaParam: lookbackDelta,
 		}
+		if selectorBatchSize > 0 {
+			queryOpts.SelectorBatchSize = selectorBatchSize
+		}
+		if stepsBatchSize > 0 {
+			queryOpts.StepsBatch = int(stepsBatchSize)
+		}
+		if decodingConcurrency > 0 {
+			queryOpts.DecodingConcurrency = int(decodingConcurrency)
+		}
 
 		var qErr error
 		qry, qErr = qapi.queryCreate.makeInstantQuery(ctx, engineParam, queryable, remoteEndpoints, planOrQuery{query: queryStr}, queryOpts, ts)
@@ -559,6 +625,21 @@ func (qapi *QueryAPI) query(r *http.Request) (interface{}, []error, *api.ApiErro
 
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
+	}
+
+	stepsBatchSize, apiErr := qapi.parseStepsBatchSize(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
+	selectorBatchSize, apiErr := qapi.parseSelectorBatchSize(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
+	decodingConcurrency, apiErr := qapi.parseDecodingConcurrency(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
 	}
 
 	enableDedup, apiErr := qapi.parseEnableDedupParam(r)
@@ -634,6 +715,15 @@ func (qapi *QueryAPI) query(r *http.Request) (interface{}, []error, *api.ApiErro
 		queryOpts := &engine.QueryOpts{
 			LookbackDeltaParam: lookbackDelta,
 		}
+		if selectorBatchSize > 0 {
+			queryOpts.SelectorBatchSize = selectorBatchSize
+		}
+		if stepsBatchSize > 0 {
+			queryOpts.StepsBatch = int(stepsBatchSize)
+		}
+		if decodingConcurrency > 0 {
+			queryOpts.DecodingConcurrency = int(decodingConcurrency)
+		}
 
 		var qErr error
 		qry, qErr = qapi.queryCreate.makeInstantQuery(ctx, engineParam, queryable, remoteEndpoints, planOrQuery{query: queryStr}, queryOpts, ts)
@@ -641,11 +731,6 @@ func (qapi *QueryAPI) query(r *http.Request) (interface{}, []error, *api.ApiErro
 
 	}); err != nil {
 		return nil, nil, &api.ApiError{Typ: api.ErrorBadData, Err: err}, func() {}
-	}
-
-	analysis, err := qapi.parseQueryAnalyzeParam(r, qry)
-	if err != nil {
-		return nil, nil, apiErr, func() {}
 	}
 
 	if err := tracing.DoInSpanWithErr(ctx, "query_gate_ismyturn", qapi.gate.Start); err != nil {
@@ -668,6 +753,11 @@ func (qapi *QueryAPI) query(r *http.Request) (interface{}, []error, *api.ApiErro
 			return nil, nil, &api.ApiError{Typ: api.ErrorInternal, Err: res.Err}, qry.Close
 		}
 		return nil, nil, &api.ApiError{Typ: api.ErrorExec, Err: res.Err}, qry.Close
+	}
+
+	analysis, err := qapi.parseQueryAnalyzeParam(r, qry)
+	if err != nil {
+		return nil, nil, apiErr, func() {}
 	}
 
 	aggregator := qapi.seriesStatsAggregatorFactory.NewAggregator(tenant)
@@ -742,6 +832,21 @@ func (qapi *QueryAPI) queryRangeExplain(r *http.Request) (interface{}, []error, 
 		defer cancel()
 	}
 
+	stepsBatchSize, apiErr := qapi.parseStepsBatchSize(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
+	selectorBatchSize, apiErr := qapi.parseSelectorBatchSize(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
+	decodingConcurrency, apiErr := qapi.parseDecodingConcurrency(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
 	enableDedup, apiErr := qapi.parseEnableDedupParam(r)
 	if apiErr != nil {
 		return nil, nil, apiErr, func() {}
@@ -809,6 +914,15 @@ func (qapi *QueryAPI) queryRangeExplain(r *http.Request) (interface{}, []error, 
 		queryOpts := &engine.QueryOpts{
 			LookbackDeltaParam: lookbackDelta,
 		}
+		if selectorBatchSize > 0 {
+			queryOpts.SelectorBatchSize = selectorBatchSize
+		}
+		if stepsBatchSize > 0 {
+			queryOpts.StepsBatch = int(stepsBatchSize)
+		}
+		if decodingConcurrency > 0 {
+			queryOpts.DecodingConcurrency = int(decodingConcurrency)
+		}
 
 		var qErr error
 		qry, qErr = qapi.queryCreate.makeRangeQuery(ctx, engineParam, queryable, remoteEndpoints, planOrQuery{query: queryStr}, queryOpts, start, end, step)
@@ -867,6 +981,21 @@ func (qapi *QueryAPI) queryRange(r *http.Request) (interface{}, []error, *api.Ap
 
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
+	}
+
+	stepsBatchSize, apiErr := qapi.parseStepsBatchSize(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
+	selectorBatchSize, apiErr := qapi.parseSelectorBatchSize(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
+	}
+
+	decodingConcurrency, apiErr := qapi.parseDecodingConcurrency(r)
+	if apiErr != nil {
+		return nil, nil, apiErr, func() {}
 	}
 
 	enableDedup, apiErr := qapi.parseEnableDedupParam(r)
@@ -942,6 +1071,17 @@ func (qapi *QueryAPI) queryRange(r *http.Request) (interface{}, []error, *api.Ap
 		queryOpts := &engine.QueryOpts{
 			LookbackDeltaParam: lookbackDelta,
 		}
+		if selectorBatchSize > 0 {
+			queryOpts.SelectorBatchSize = selectorBatchSize
+		}
+
+		if stepsBatchSize > 0 {
+			queryOpts.StepsBatch = int(stepsBatchSize)
+		}
+
+		if decodingConcurrency > 0 {
+			queryOpts.DecodingConcurrency = int(decodingConcurrency)
+		}
 
 		var qErr error
 		qry, qErr = qapi.queryCreate.makeRangeQuery(ctx, engineParam, queryable, remoteEndpoints, planOrQuery{query: queryStr}, queryOpts, start, end, step)
@@ -949,11 +1089,6 @@ func (qapi *QueryAPI) queryRange(r *http.Request) (interface{}, []error, *api.Ap
 
 	}); err != nil {
 		return nil, nil, &api.ApiError{Typ: api.ErrorBadData, Err: err}, func() {}
-	}
-
-	analysis, err := qapi.parseQueryAnalyzeParam(r, qry)
-	if err != nil {
-		return nil, nil, apiErr, func() {}
 	}
 
 	if err := tracing.DoInSpanWithErr(ctx, "query_gate_ismyturn", qapi.gate.Start); err != nil {
@@ -975,6 +1110,11 @@ func (qapi *QueryAPI) queryRange(r *http.Request) (interface{}, []error, *api.Ap
 			return nil, nil, &api.ApiError{Typ: api.ErrorTimeout, Err: res.Err}, qry.Close
 		}
 		return nil, nil, &api.ApiError{Typ: api.ErrorExec, Err: res.Err}, qry.Close
+	}
+
+	analysis, err := qapi.parseQueryAnalyzeParam(r, qry)
+	if err != nil {
+		return nil, nil, apiErr, func() {}
 	}
 	aggregator := qapi.seriesStatsAggregatorFactory.NewAggregator(tenant)
 	for i := range seriesStats {

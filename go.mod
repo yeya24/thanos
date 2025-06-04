@@ -1,6 +1,6 @@
 module github.com/thanos-io/thanos
 
-go 1.24
+go 1.24.0
 
 require (
 	capnproto.org/go/capnp/v3 v3.0.0-alpha.30
@@ -15,7 +15,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/chromedp/cdproto v0.0.0-20230802225258-3cf4e6d46a89
 	github.com/chromedp/chromedp v0.9.2
-	github.com/cortexproject/promqlsmith v0.0.0-20240506042652-6cfdd9739a5e
+	github.com/cortexproject/promqlsmith v0.0.0-20250407233056-90db95b1a4e4
 	github.com/cristalhq/hedgedhttp v0.9.1
 	github.com/dustin/go-humanize v1.0.1
 	github.com/efficientgo/core v1.0.0-rc.3
@@ -286,6 +286,8 @@ replace (
 
 	// Pin kuberesolver/v5 to support new grpc version. Need to upgrade kuberesolver version on weaveworks/common.
 	github.com/sercand/kuberesolver/v4 => github.com/sercand/kuberesolver/v5 v5.1.1
+
+	github.com/thanos-io/promql-engine => github.com/yeya24/promql-engine v0.0.0-20250526184156-dbd0c008a381
 
 	github.com/vimeo/galaxycache => github.com/thanos-community/galaxycache v0.0.0-20211122094458-3a32041a1f1e
 

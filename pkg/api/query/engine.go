@@ -106,8 +106,9 @@ func NewQueryFactory(
 				EnableNegativeOffset: true,
 				EnableAtModifier:     true,
 			},
-			EnableXFunctions: enableXFunctions,
-			EnableAnalysis:   true,
+			EnableXFunctions:            enableXFunctions,
+			EnableAnalysis:              true,
+			DisableDuplicateLabelChecks: true,
 		}
 		if activeQueryTracker != nil {
 			opts.ActiveQueryTracker = activeQueryTracker
