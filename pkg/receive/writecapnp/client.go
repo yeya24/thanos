@@ -19,10 +19,11 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/thanos-io/thanos/pkg/store/storepb"
+	"github.com/thanos-io/thanos/pkg/symboltable"
 )
 
 type Dialer interface {
-	Dial() (net.Conn, error)
+	DialContext(ctx context.Context) (net.Conn, error)
 }
 
 type TCPDialer struct {
@@ -33,12 +34,9 @@ func NewTCPDialer(address string) *TCPDialer {
 	return &TCPDialer{address: address}
 }
 
-func (t TCPDialer) Dial() (net.Conn, error) {
-	addr, err := net.ResolveTCPAddr("tcp", t.address)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := net.DialTCP("tcp", nil, addr)
+func (t TCPDialer) DialContext(ctx context.Context) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", t.address)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to dial peer %s", t.address)
 	}
@@ -83,6 +81,12 @@ func (r *RemoteWriteClient) RemoteWrite(ctx context.Context, in *storepb.WriteRe
 		}
 	}
 
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &storepb.WriteResponse{}, status.Error(codes.DeadlineExceeded, fmt.Sprintf("writing to peer: %s", err.Error()))
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return &storepb.WriteResponse{}, status.Error(codes.Canceled, fmt.Sprintf("writing to peer: %s", err.Error()))
+	}
 	return &storepb.WriteResponse{}, status.Error(codes.Unavailable, fmt.Sprintf("writing to peer: %s", err.Error()))
 }
 
@@ -96,7 +100,50 @@ func (r *RemoteWriteClient) writeWithReconnect(ctx context.Context, numReconnect
 		if err != nil {
 			return err
 		}
-		return BuildInto(wr, in.Tenant, in.Timeseries)
+
+		if len(in.TimeseriesTenantData) == 0 {
+			if err := BuildIntoSingleTenantWriteRequest(wr, in.Tenant, in.Timeseries); err != nil {
+				return err
+			}
+			if err := params.SetWr(wr); err != nil {
+				return err
+			}
+
+			return nil
+		}
+
+		sym, err := wr.NewSymbols()
+		if err != nil {
+			return err
+		}
+
+		tl, err := NewTimeSeriesTenantTuple_List(wr.Segment(), int32(len(in.TimeseriesTenantData)))
+		if err != nil {
+			return err
+		}
+
+		builder := symboltable.NewBuilder()
+
+		for i, d := range in.TimeseriesTenantData {
+			ttl := tl.At(i)
+			if err := BuildInto(&ttl, d.Tenant, d.Timeseries, builder); err != nil {
+				return err
+			}
+		}
+
+		if err := marshalSymbols(builder, sym); err != nil {
+			return err
+		}
+
+		if err := wr.SetData(tl); err != nil {
+			return err
+		}
+
+		if err := params.SetWr(wr); err != nil {
+			return err
+		}
+
+		return nil
 	})
 	defer release()
 
@@ -154,7 +201,7 @@ func (r *RemoteWriteClient) connect(ctx context.Context) error {
 		return nil
 	}
 
-	conn, err := r.dialer.Dial()
+	conn, err := r.dialer.DialContext(ctx)
 	if err != nil {
 		return errors.Wrap(err, "failed to dial peer")
 	}

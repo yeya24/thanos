@@ -240,6 +240,19 @@ func Delete(ctx context.Context, logger log.Logger, bkt objstore.Bucket, id ulid
 		level.Debug(logger).Log("msg", "deleted file", "file", deletionMarkFile, "bucket", bkt.Name())
 	}
 
+	// Some object storages represent directories as explicit empty objects.
+	// We try to delete the directory marker objects themselves after all their contents are removed.
+	directoryMarkerPaths := []string{
+		path.Join(id.String(), ChunksDirname) + objstore.DirDelim,
+		id.String() + objstore.DirDelim,
+	}
+
+	for _, p := range directoryMarkerPaths {
+		if err := bkt.Delete(ctx, p); err != nil && !bkt.IsObjNotFoundErr(err) {
+			level.Debug(logger).Log("msg", "failed to delete directory marker object", "dir", p, "err", err)
+		}
+	}
+
 	return nil
 }
 
@@ -405,7 +418,7 @@ func MarkForNoDownsample(ctx context.Context, logger log.Logger, bkt objstore.Bu
 		return errors.Wrapf(err, "check exists %s in bucket", m)
 	}
 	if noDownsampleMarkExists {
-		level.Warn(logger).Log("msg", "requested to mark for no deletion, but file already exists; this should not happen; investigate", "err", errors.Errorf("file %s already exists in bucket", m))
+		level.Warn(logger).Log("msg", "requested to mark for no downsampling, but file already exists; this should not happen; investigate", "err", errors.Errorf("file %s already exists in bucket", m))
 		return nil
 	}
 	noDownsampleMark, err := json.Marshal(metadata.NoDownsampleMark{

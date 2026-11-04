@@ -76,6 +76,7 @@ import (
 	grpcserver "github.com/thanos-io/thanos/pkg/server/grpc"
 	httpserver "github.com/thanos-io/thanos/pkg/server/http"
 	"github.com/thanos-io/thanos/pkg/shipper"
+	"github.com/thanos-io/thanos/pkg/status"
 	"github.com/thanos-io/thanos/pkg/store"
 	"github.com/thanos-io/thanos/pkg/store/labelpb"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
@@ -113,6 +114,7 @@ type ruleConfig struct {
 	ignoredLabelNames  []string
 	storeRateLimits    store.SeriesSelectLimits
 	ruleConcurrentEval int64
+	ruleQueueCapacity  int
 
 	extendedFunctionsEnabled   bool
 	EnableFeatures             []string
@@ -166,6 +168,7 @@ func registerRule(app *extkingpin.App) {
 	cmd.Flag("restore-ignored-label", "Label names to be ignored when restoring alerts from the remote storage. This is only used in stateless mode.").
 		StringsVar(&conf.ignoredLabelNames)
 	cmd.Flag("rule-concurrent-evaluation", "How many rules can be evaluated concurrently. Default is 1.").Default("1").Int64Var(&conf.ruleConcurrentEval)
+	cmd.Flag("rule-queue-capacity", "The capacity of the queue for pending Alertmanager notifications. Default is 10000").Default("10000").Hidden().IntVar(&conf.ruleQueueCapacity)
 
 	cmd.Flag("grpc-query-endpoint", "Addresses of Thanos gRPC query API servers (repeatable). The scheme may be prefixed with 'dns+' or 'dnssrv+' to detect Thanos API servers through respective DNS lookups.").
 		PlaceHolder("<endpoint>").StringsVar(&conf.grpcQueryEndpoints)
@@ -196,11 +199,12 @@ func registerRule(app *extkingpin.App) {
 		}
 
 		tsdbOpts := &tsdb.Options{
-			MinBlockDuration:  int64(time.Duration(*tsdbBlockDuration) / time.Millisecond),
-			MaxBlockDuration:  int64(time.Duration(*tsdbBlockDuration) / time.Millisecond),
-			RetentionDuration: int64(time.Duration(*tsdbRetention) / time.Millisecond),
-			NoLockfile:        *noLockFile,
-			WALCompression:    compressutil.ParseCompressionType(*walCompression, compression.Snappy),
+			MinBlockDuration:    int64(time.Duration(*tsdbBlockDuration) / time.Millisecond),
+			MaxBlockDuration:    int64(time.Duration(*tsdbBlockDuration) / time.Millisecond),
+			RetentionDuration:   int64(time.Duration(*tsdbRetention) / time.Millisecond),
+			BlockReloadInterval: time.Minute,
+			NoLockfile:          *noLockFile,
+			WALCompression:      compressutil.ParseCompressionType(*walCompression, compression.Snappy),
 		}
 
 		agentOpts := &agent.Options{
@@ -421,16 +425,18 @@ func runRule(
 			logger,
 			reg,
 			tracer,
-			false,
-			false,
-			"",
-			"",
-			"",
-			"",
 		)
 		if err != nil {
 			return err
 		}
+
+		tlsDialOpts, err := extgrpc.StoreClientTLSCredentials(logger, false, false, "", "", "", "", "")
+		if err != nil {
+			return err
+		}
+
+		// No TLS config for rule component
+		noTLSConfig := &tlsConfig{}
 
 		grpcEndpointSet, err = setupEndpointSet(
 			g,
@@ -451,6 +457,9 @@ func runRule(
 			5*time.Second,
 			conf.evalInterval,
 			dialOpts,
+			noTLSConfig,
+			tlsDialOpts,
+			"", // no global compression
 			[]string{},
 		)
 		if err != nil {
@@ -462,7 +471,6 @@ func runRule(
 		appendable storage.Appendable
 		queryable  storage.Queryable
 		tsdbDB     *tsdb.DB
-		agentDB    *agent.DB
 	)
 
 	rwCfgYAML, err := conf.rwConfig.Content()
@@ -471,33 +479,19 @@ func runRule(
 	}
 
 	if len(rwCfgYAML) > 0 {
-		var rwCfg struct {
-			RemoteWriteConfigs []*config.RemoteWriteConfig `yaml:"remote_write,omitempty"`
-		}
-		if err := yaml.Unmarshal(rwCfgYAML, &rwCfg); err != nil {
-			return errors.Wrapf(err, "failed to parse remote write config %v", string(rwCfgYAML))
-		}
-
-		slogger := logutil.GoKitLogToSlog(logger)
-		// flushDeadline is set to 1m, but it is for metadata watcher only so not used here.
-		// TODO: add type and unit labels support?
-		remoteStore := remote.NewStorage(slogger, reg, func() (int64, error) {
-			return 0, nil
-		}, conf.dataDir, 1*time.Minute, &readyScrapeManager{}, false)
-		if err := remoteStore.ApplyConfig(&config.Config{
-			GlobalConfig: config.GlobalConfig{
-				ExternalLabels: labelsTSDBToProm(conf.lset),
-			},
-			RemoteWriteConfigs: rwCfg.RemoteWriteConfigs,
-		}); err != nil {
-			return errors.Wrap(err, "applying config to remote storage")
-		}
-
-		agentDB, err = agent.Open(slogger, reg, remoteStore, conf.dataDir, agentOpts)
+		fanoutStore, err := openStatelessRuleStorage(logger, reg, conf.dataDir, rwCfgYAML, labelsTSDBToProm(conf.lset), agentOpts)
 		if err != nil {
-			return errors.Wrap(err, "start remote write agent db")
+			return err
 		}
-		fanoutStore := storage.NewFanout(slogger, agentDB, remoteStore)
+		{
+			done := make(chan struct{})
+			g.Add(func() error {
+				<-done
+				return fanoutStore.Close()
+			}, func(error) {
+				close(done)
+			})
+		}
 		appendable = fanoutStore
 		// Use a separate queryable to restore the ALERTS firing states.
 		// We cannot use remoteStore directly because it uses remote read for
@@ -586,7 +580,7 @@ func runRule(
 
 	var (
 		ruleMgr *thanosrules.Manager
-		alertQ  = alert.NewQueue(logger, reg, 10000, 100, labelsTSDBToProm(conf.lset), conf.alertmgr.alertExcludeLabels, alertRelabelConfigs)
+		alertQ  = alert.NewQueue(logger, reg, conf.ruleQueueCapacity, 100, labelsTSDBToProm(conf.lset), conf.alertmgr.alertExcludeLabels, alertRelabelConfigs)
 	)
 	{
 		if conf.extendedFunctionsEnabled {
@@ -735,7 +729,7 @@ func runRule(
 	)
 
 	// Start gRPC server.
-	tlsCfg, err := tls.NewServerConfig(log.With(logger, "protocol", "gRPC"), conf.grpc.tlsSrvCert, conf.grpc.tlsSrvKey, conf.grpc.tlsSrvClientCA, conf.grpc.tlsMinVersion)
+	tlsCfg, err := tls.NewServerConfig(log.With(logger, "protocol", "gRPC"), conf.grpc.tlsSrvCert, conf.grpc.tlsSrvKey, conf.grpc.tlsSrvClientCA, conf.grpc.tlsMinVersion, conf.grpc.tlsCiphers, conf.grpc.tlsCurves)
 	if err != nil {
 		return errors.Wrap(err, "setup gRPC server")
 	}
@@ -768,9 +762,41 @@ func runRule(
 				}
 				return nil, errors.New("Not ready")
 			}),
+			info.WithStatusInfoFunc(),
 		)
 		storeServer := store.NewLimitedStoreServer(store.NewInstrumentedStoreServer(reg, tsdbStore), reg, conf.storeRateLimits)
 		options = append(options, grpcserver.WithServer(store.RegisterStoreServer(storeServer, logger)))
+
+		// Add Status server for TSDB statistics
+		statusSrv := status.NewServer(
+			component.Rule.String(),
+			status.WithTSDBStatisticsGetter(
+				status.TSDBStatisticsGetterFunc(func(limit int, matchers []storepb.LabelMatcher) (map[string]tsdb.Stats, error) {
+					if !httpProbe.IsReady() {
+						return nil, errors.New("not ready")
+					}
+
+					// Check if external labels match the provided matchers.
+					extLabels := conf.lset
+					promMatchers, err := storepb.MatchersToPromMatchers(matchers...)
+					if err != nil {
+						return nil, errors.Wrap(err, "failed to convert matchers")
+					}
+					for _, matcher := range promMatchers {
+						if !matcher.Matches(extLabels.Get(matcher.Name)) {
+							// External labels don't match, return empty result.
+							return nil, nil
+						}
+					}
+
+					stats := tsdbDB.Head().Stats(labels.MetricName, limit)
+					return map[string]tsdb.Stats{
+						"": *stats,
+					}, nil
+				}),
+			),
+		)
+		options = append(options, grpcserver.WithServer(status.RegisterStatusServer(statusSrv)))
 	}
 
 	options = append(options, grpcserver.WithServer(
@@ -853,16 +879,14 @@ func runRule(
 		}
 		bkt = objstoretracing.WrapWithTraces(objstore.WrapWithMetrics(bkt, extprom.WrapRegistererWithPrefix("thanos_", reg), bkt.Name()))
 
-		// Ensure we close up everything properly.
-		defer func() {
-			if err != nil {
-				runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
-			}
-		}()
+		dataDir, err := os.OpenRoot(conf.dataDir)
+		if err != nil {
+			return errors.Wrap(err, "open data dir")
+		}
 
 		s := shipper.New(
 			bkt,
-			conf.dataDir,
+			dataDir,
 			shipper.WithLogger(logger),
 			shipper.WithRegisterer(reg),
 			shipper.WithSource(metadata.RulerSource),
@@ -878,7 +902,6 @@ func runRule(
 
 		g.Add(func() error {
 			defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
-
 			return runutil.Repeat(30*time.Second, ctx.Done(), func() error {
 				if _, err := s.Sync(ctx); err != nil {
 					level.Warn(logger).Log("err", err)
@@ -887,6 +910,9 @@ func runRule(
 			})
 		}, func(error) {
 			cancel()
+
+			runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
+			runutil.CloseWithLogOnErr(logger, dataDir, "data dir")
 		})
 	} else {
 		level.Info(logger).Log("msg", "no supported bucket was configured, uploads will be disabled")
@@ -973,7 +999,9 @@ func queryFuncCreator(
 			if grpcEndpointSet != nil {
 				queryAPIClients := grpcEndpointSet.GetQueryAPIClients()
 				for _, i := range rand.Perm(len(queryAPIClients)) {
-					e := query.NewRemoteEngine(logger, queryAPIClients[i], query.Opts{})
+					e := query.NewRemoteEngine(logger, queryAPIClients[i], query.Opts{
+						PartialResponse: partialResponseStrategy == storepb.PartialResponseStrategy_WARN,
+					})
 					expr, err := extpromql.ParseExpr(qs)
 					if err != nil {
 						level.Error(logger).Log("err", err, "query", qs)
@@ -1146,3 +1174,79 @@ func (rm *readyScrapeManager) Get() (*scrape.Manager, error) {
 
 // ErrNotReady is returned if the underlying scrape manager is not ready yet.
 var ErrNotReady = errors.New("scrape manager not ready")
+
+func parseRemoteWriteConfig(rwCfgYAML []byte, externalLabels labels.Labels) (*config.Config, error) {
+	var rwCfg struct {
+		RemoteWriteConfigs []*config.RemoteWriteConfig `yaml:"remote_write,omitempty"`
+	}
+	if err := yaml.UnmarshalStrict(rwCfgYAML, &rwCfg); err != nil {
+		return nil, errors.Wrapf(err, "failed to parse remote write config %v", string(rwCfgYAML))
+	}
+	if len(rwCfg.RemoteWriteConfigs) == 0 {
+		return nil, errors.New("no remote_write configs specified")
+	}
+
+	globalCfg := config.DefaultGlobalConfig
+	globalCfg.ExternalLabels = externalLabels
+
+	rwNames := make(map[string]struct{}, len(rwCfg.RemoteWriteConfigs))
+	for _, rwcfg := range rwCfg.RemoteWriteConfigs {
+		if rwcfg == nil {
+			return nil, errors.New("empty or null remote write config section")
+		}
+		if _, ok := rwNames[rwcfg.Name]; ok && rwcfg.Name != "" {
+			return nil, errors.Errorf("found multiple remote write configs with job name %q", rwcfg.Name)
+		}
+		if err := rwcfg.Validate(globalCfg.MetricNameValidationScheme); err != nil {
+			return nil, errors.Wrap(err, "validate remote write config")
+		}
+		rwNames[rwcfg.Name] = struct{}{}
+	}
+
+	return &config.Config{
+		GlobalConfig:       globalCfg,
+		RemoteWriteConfigs: rwCfg.RemoteWriteConfigs,
+	}, nil
+}
+
+func openStatelessRuleStorage(
+	logger log.Logger,
+	reg prometheus.Registerer,
+	dataDir string,
+	rwCfgYAML []byte,
+	externalLabels labels.Labels,
+	agentOpts *agent.Options,
+) (storage.Storage, error) {
+	promCfg, err := parseRemoteWriteConfig(rwCfgYAML, externalLabels)
+	if err != nil {
+		return nil, err
+	}
+
+	slogger := logutil.GoKitLogToSlog(logger)
+	// flushDeadline is set to 1m, but it is for metadata watcher only so not used here.
+	// TODO: add type and unit labels support?
+	remoteStore := remote.NewStorage(slogger, reg, func() (int64, error) {
+		return 0, nil
+	}, dataDir, 1*time.Minute, &readyScrapeManager{}, false)
+
+	// Open the agent WAL before applying remote storage config so that the initial
+	// WAL segment exists when QueueManager starts its WAL watcher.
+	agentDB, err := agent.Open(slogger, reg, remoteStore, dataDir, agentOpts)
+	if err != nil {
+		_ = remoteStore.Close()
+		return nil, errors.Wrap(err, "start remote write agent db")
+	}
+	// We need to call SetWriteNotified() so that agentDB gets notified about every write.
+	// Without it we fallback to polling, which pulls new samples to write every 15s.
+	// If we don't call SetWriteNotified() we'll have up to 15s lag between rule evaluation
+	// and samples being sent over via remote_write.
+	agentDB.SetWriteNotified(remoteStore)
+
+	if err := remoteStore.ApplyConfig(promCfg); err != nil {
+		_ = agentDB.Close()
+		_ = remoteStore.Close()
+		return nil, errors.Wrap(err, "applying config to remote storage")
+	}
+
+	return storage.NewFanout(slogger, agentDB, remoteStore), nil
+}

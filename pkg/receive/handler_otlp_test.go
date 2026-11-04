@@ -18,6 +18,8 @@ import (
 )
 
 func TestOTLPWriteHandler(t *testing.T) {
+	t.Parallel()
+
 	exportRequest := generateOTLPWriteRequest()
 
 	buf, err := exportRequest.MarshalProto()
@@ -29,7 +31,7 @@ func TestOTLPWriteHandler(t *testing.T) {
 		},
 	}
 
-	handlers, _, closeFunc, err := newTestHandlerHashring(appendables, 1, AlgorithmHashmod, false)
+	handlers, _, closeFunc, err := newTestHandlerHashring("otlp_write_handler", appendables, 1, AlgorithmHashmod, false)
 	require.NoError(t, err)
 	defer func() {
 		testutil.Ok(t, closeFunc())

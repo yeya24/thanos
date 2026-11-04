@@ -35,7 +35,6 @@ import (
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/relabel"
 	"github.com/prometheus/prometheus/tsdb"
-	"github.com/prometheus/prometheus/tsdb/chunkenc"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 	"gopkg.in/yaml.v3"
@@ -111,11 +110,11 @@ type bucketVerifyConfig struct {
 }
 
 type bucketLsConfig struct {
-	output              string
-	excludeDelete       bool
-	selectorRelabelConf extflag.PathOrContent
-	filterConf          *store.FilterConfig
-	timeout             time.Duration
+	output          string
+	excludeDelete   bool
+	selectorRelabel *relabelCfg
+	filterConf      *store.FilterConfig
+	timeout         time.Duration
 }
 
 type bucketWebConfig struct {
@@ -187,7 +186,8 @@ func (tbc *bucketVerifyConfig) registerBucketVerifyFlag(cmd extkingpin.FlagClaus
 }
 
 func (tbc *bucketLsConfig) registerBucketLsFlag(cmd extkingpin.FlagClause) *bucketLsConfig {
-	tbc.selectorRelabelConf = *extkingpin.RegisterSelectorRelabelFlags(cmd)
+	tbc.selectorRelabel = &relabelCfg{PathOrContent: extkingpin.RegisterSelectorRelabelFlags(cmd)}
+
 	tbc.filterConf = &store.FilterConfig{}
 
 	cmd.Flag("output", "Optional format in which to print each block's information. Options are 'json', 'wide' or a custom template.").
@@ -438,12 +438,7 @@ func registerBucketLs(app extkingpin.AppClause, objStoreConfig *extflag.PathOrCo
 			level.Warn(logger).Log("msg", "Timeout less than 1m could lead to frequent failures")
 		}
 
-		relabelContentYaml, err := tbc.selectorRelabelConf.Content()
-		if err != nil {
-			return errors.Wrap(err, "get content of relabel configuration")
-		}
-
-		relabelConfig, err := block.ParseRelabelConfig(relabelContentYaml, block.SelectorSupportedRelabelActions)
+		relabelConfig, err := tbc.selectorRelabel.RelabelConfig(block.SelectorSupportedRelabelActions)
 		if err != nil {
 			return err
 		}
@@ -612,7 +607,7 @@ func registerBucketWeb(app extkingpin.AppClause, objStoreConfig *extflag.PathOrC
 		Default("0000-01-01T00:00:00Z").SetValue(&filterConf.MinTime)
 	cmd.Flag("max-time", "End of time range limit to serve. Thanos tool bucket web will serve only blocks, which happened earlier than this value. Option can be a constant time in RFC3339 format or time duration relative to current time, such as -1d or 2h45m. Valid duration units are ms, s, m, h, d, w, y.").
 		Default("9999-12-31T23:59:59Z").SetValue(&filterConf.MaxTime)
-	selectorRelabelConf := *extkingpin.RegisterSelectorRelabelFlags(cmd)
+	selectorRelabelConf := &relabelCfg{extkingpin.RegisterSelectorRelabelFlags(cmd)}
 
 	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, tracer opentracing.Tracer, _ <-chan struct{}, _ bool) error {
 		comp := component.Bucket
@@ -694,12 +689,7 @@ func registerBucketWeb(app extkingpin.AppClause, objStoreConfig *extflag.PathOrC
 			level.Warn(logger).Log("msg", "Refresh interval should be at least 2 times the timeout")
 		}
 
-		relabelContentYaml, err := selectorRelabelConf.Content()
-		if err != nil {
-			return errors.Wrap(err, "get content of relabel configuration")
-		}
-
-		relabelConfig, err := block.ParseRelabelConfig(relabelContentYaml, block.SelectorSupportedRelabelActions)
+		relabelConfig, err := selectorRelabelConf.RelabelConfig(block.SelectorSupportedRelabelActions)
 		if err != nil {
 			return err
 		}
@@ -844,19 +834,14 @@ func registerBucketCleanup(app extkingpin.AppClause, objStoreConfig *extflag.Pat
 	tbc := &bucketCleanupConfig{}
 	tbc.registerBucketCleanupFlag(cmd)
 
-	selectorRelabelConf := extkingpin.RegisterSelectorRelabelFlags(cmd)
+	selectorRelabelConf := &relabelCfg{extkingpin.RegisterSelectorRelabelFlags(cmd)}
 	cmd.Setup(func(g *run.Group, logger log.Logger, reg *prometheus.Registry, _ opentracing.Tracer, _ <-chan struct{}, _ bool) error {
 		confContentYaml, err := objStoreConfig.Content()
 		if err != nil {
 			return err
 		}
 
-		relabelContentYaml, err := selectorRelabelConf.Content()
-		if err != nil {
-			return errors.Wrap(err, "get content of relabel configuration")
-		}
-
-		relabelConfig, err := block.ParseRelabelConfig(relabelContentYaml, block.SelectorSupportedRelabelActions)
+		relabelConfig, err := selectorRelabelConf.RelabelConfig(block.SelectorSupportedRelabelActions)
 		if err != nil {
 			return err
 		}
@@ -1174,6 +1159,23 @@ func registerBucketMarkBlock(app extkingpin.AppClause, objStoreConfig *extflag.P
 	})
 }
 
+// checkDownsampledRewrite rejects rewrites that would re-encode aggregated chunks of a downsampled block.
+func checkDownsampledRewrite(meta *metadata.Meta, deletions []metadata.DeletionRequest, relabels []*relabel.Config) error {
+	res := meta.Thanos.Downsample.Resolution
+	if res == downsample.ResLevel0 {
+		return nil
+	}
+	if len(relabels) > 0 {
+		return errors.Errorf("block %s is downsampled (resolution %d): only whole-series deletions are supported, got relabel config", meta.ULID, res)
+	}
+	for _, d := range deletions {
+		if len(d.Intervals) > 0 {
+			return errors.Errorf("block %s is downsampled (resolution %d): only whole-series deletions are supported, got deletion with intervals", meta.ULID, res)
+		}
+	}
+	return nil
+}
+
 func registerBucketRewrite(app extkingpin.AppClause, objStoreConfig *extflag.PathOrContent) {
 	cmd := app.Command(component.Rewrite.String(), "Rewrite chosen blocks in the bucket, while deleting or modifying series "+
 		"Resulted block has modified stats in meta.json. Additionally compaction.sources are altered to not confuse readers of meta.json. "+
@@ -1254,9 +1256,20 @@ func registerBucketRewrite(app extkingpin.AppClause, objStoreConfig *extflag.Pat
 
 		ctx, cancel := context.WithCancel(context.Background())
 		g.Add(func() error {
-			chunkPool := chunkenc.NewPool()
+			// Downsampled blocks hold aggregated chunks, which the Prometheus pool cannot decode.
+			chunkPool := downsample.NewPool()
 			changeLog := compactv2.NewChangeLog(io.Discard)
 			stubCounter := promauto.With(nil).NewCounter(prometheus.CounterOpts{})
+			// Check all blocks before rewriting any of them.
+			for _, id := range ids {
+				meta, err := block.DownloadMeta(ctx, logger, insBkt, id)
+				if err != nil {
+					return errors.Wrapf(err, "download meta of %v", id)
+				}
+				if err := checkDownsampledRewrite(&meta, deletions, relabels); err != nil {
+					return err
+				}
+			}
 			for _, id := range ids {
 				// Delete series from block & modify.
 				level.Info(logger).Log("msg", "downloading block", "source", id)
@@ -1367,7 +1380,7 @@ func registerBucketRetention(app extkingpin.AppClause, objStoreConfig *extflag.P
 	tbc := &bucketRetentionConfig{}
 	tbc.registerBucketRetentionFlag(cmd)
 
-	selectorRelabelConf := extkingpin.RegisterSelectorRelabelFlags(cmd)
+	selectorRelabelConf := &relabelCfg{extkingpin.RegisterSelectorRelabelFlags(cmd)}
 	cmd.Flag("retention.resolution-raw",
 		"How long to retain raw samples in bucket. Setting this to 0d will retain samples of this resolution forever").
 		Default("0d").SetValue(&retentionRaw)
@@ -1397,12 +1410,7 @@ func registerBucketRetention(app extkingpin.AppClause, objStoreConfig *extflag.P
 			return err
 		}
 
-		relabelContentYaml, err := selectorRelabelConf.Content()
-		if err != nil {
-			return errors.Wrap(err, "get content of relabel configuration")
-		}
-
-		relabelConfig, err := block.ParseRelabelConfig(relabelContentYaml, block.SelectorSupportedRelabelActions)
+		relabelConfig, err := selectorRelabelConf.RelabelConfig(block.SelectorSupportedRelabelActions)
 		if err != nil {
 			return err
 		}
@@ -1501,13 +1509,18 @@ func registerBucketUploadBlocks(app extkingpin.AppClause, objStoreConfig *extfla
 		if err != nil {
 			return errors.Wrap(err, "unable to create bucket")
 		}
-		defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
 
 		bkt = objstoretracing.WrapWithTraces(objstore.WrapWithMetrics(bkt, extprom.WrapRegistererWithPrefix("thanos_", reg), bkt.Name()))
 
+		tbcDir, err := os.OpenRoot(tbc.path)
+		if err != nil {
+			runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
+			return errors.Wrap(err, "unable to open tbc directory")
+		}
+
 		s := shipper.New(
 			bkt,
-			tbc.path,
+			tbcDir,
 			shipper.WithLogger(logger),
 			shipper.WithRegisterer(reg),
 			shipper.WithSource(metadata.BucketUploadSource),
@@ -1519,6 +1532,9 @@ func registerBucketUploadBlocks(app extkingpin.AppClause, objStoreConfig *extfla
 
 		ctx, cancel := context.WithCancel(context.Background())
 		g.Add(func() error {
+			defer runutil.CloseWithLogOnErr(logger, bkt, "bucket client")
+			defer runutil.CloseWithLogOnErr(logger, tbcDir, "tbc directory")
+
 			n, err := s.Sync(ctx)
 			if err != nil {
 				return errors.Wrap(err, "unable to sync blocks")

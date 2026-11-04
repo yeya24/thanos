@@ -90,18 +90,6 @@ const (
 	chunkBytesPoolMinSize = 64 * 1024        // 64 KiB
 	chunkBytesPoolMaxSize = 64 * 1024 * 1024 // 64 MiB
 
-	// CompatibilityTypeLabelName is an artificial label that Store Gateway can optionally advertise. This is required for compatibility
-	// with pre v0.8.0 Querier. Previous Queriers was strict about duplicated external labels of all StoreAPIs that had any labels.
-	// Now with newer Store Gateway advertising all the external labels it has access to, there was simple case where
-	// Querier was blocking Store Gateway as duplicate with sidecar.
-	//
-	// Newer Queriers are not strict, no duplicated external labels check is there anymore.
-	// Additionally newer Queriers removes/ignore this exact labels from UI and querying.
-	//
-	// This label name is intentionally against Prometheus label style.
-	// TODO(bwplotka): Remove it at some point.
-	CompatibilityTypeLabelName = "@thanos_compatibility_store_type"
-
 	// DefaultPostingOffsetInMemorySampling represents default value for --store.index-header-posting-offsets-in-mem-sampling.
 	// 32 value is chosen as it's a good balance for common setups. Sampling that is not too large (too many CPU cycles) and
 	// not too small (too much memory).
@@ -188,8 +176,19 @@ type bucketStoreMetrics struct {
 	chunkFetchDurationSum *prometheus.HistogramVec
 }
 
-func newBucketStoreMetrics(reg prometheus.Registerer) *bucketStoreMetrics {
+func newBucketStoreMetrics(reg prometheus.Registerer, chunkPool pool.Pool[byte]) *bucketStoreMetrics {
 	var m bucketStoreMetrics
+
+	if chunkPool != nil {
+		promauto.With(reg).NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "thanos_bucket_store_chunk_pool_used_bytes",
+			Help: "Number of bytes currently in use from the chunk pool.",
+		}, func() float64 { return float64(chunkPool.UsedBytes()) })
+		promauto.With(reg).NewGaugeFunc(prometheus.GaugeOpts{
+			Name: "thanos_bucket_store_chunk_pool_max_bytes",
+			Help: "Maximum number of bytes the chunk pool allows to be in use, as set by --chunk-pool-size.",
+		}, func() float64 { return float64(chunkPool.MaxBytes()) })
+	}
 
 	m.blockLoads = promauto.With(reg).NewCounter(prometheus.CounterOpts{
 		Name: "thanos_bucket_store_block_loads_total",
@@ -430,9 +429,8 @@ type BucketStore struct {
 
 	partitioner Partitioner
 
-	filterConfig             *FilterConfig
-	advLabelSets             []labelpb.ZLabelSet
-	enableCompatibilityLabel bool
+	filterConfig *FilterConfig
+	advLabelSets []labelpb.ZLabelSet
 
 	// Every how many posting offset entry we pool in heap memory. Default in Prometheus is 32.
 	postingOffsetsInMemSampling int
@@ -654,7 +652,6 @@ func NewBucketStore(
 	bytesLimiterFactory BytesLimiterFactory,
 	partitioner Partitioner,
 	blockSyncConcurrency int,
-	enableCompatibilityLabel bool,
 	postingOffsetsInMemSampling int,
 	enableSeriesResponseHints bool, // TODO(pracucci) Thanos 0.12 and below doesn't gracefully handle new fields in SeriesResponse. Drop this flag and always enable hints once we can drop backward compatibility.
 	lazyIndexReaderEnabled bool,
@@ -681,7 +678,6 @@ func NewBucketStore(
 		seriesLimiterFactory:            seriesLimiterFactory,
 		bytesLimiterFactory:             bytesLimiterFactory,
 		partitioner:                     partitioner,
-		enableCompatibilityLabel:        enableCompatibilityLabel,
 		postingOffsetsInMemSampling:     postingOffsetsInMemSampling,
 		enableSeriesResponseHints:       enableSeriesResponseHints,
 		enableChunkHashCalculation:      enableChunkHashCalculation,
@@ -701,7 +697,7 @@ func NewBucketStore(
 	// Depend on the options
 	indexReaderPoolMetrics := indexheader.NewReaderPoolMetrics(extprom.WrapRegistererWithPrefix("thanos_bucket_store_", s.reg))
 	s.indexReaderPool = indexheader.NewReaderPool(s.logger, lazyIndexReaderEnabled, lazyIndexReaderIdleTimeout, indexReaderPoolMetrics, s.indexHeaderLazyDownloadStrategy)
-	s.metrics = newBucketStoreMetrics(s.reg) // TODO(metalmatze): Might be possible via Option too
+	s.metrics = newBucketStoreMetrics(s.reg, s.chunkPool) // TODO(metalmatze): Might be possible via Option too
 
 	if err := s.validate(); err != nil {
 		return nil, errors.Wrap(err, "validate config")
@@ -1024,14 +1020,9 @@ func (s *BucketStore) TSDBInfos() []infopb.TSDBInfo {
 
 func (s *BucketStore) LabelSet() []labelpb.ZLabelSet {
 	s.mtx.RLock()
-	labelSets := s.advLabelSets
-	s.mtx.RUnlock()
+	defer s.mtx.RUnlock()
 
-	if s.enableCompatibilityLabel && len(labelSets) > 0 {
-		labelSets = append(labelSets, labelpb.ZLabelSet{Labels: []labelpb.ZLabel{{Name: CompatibilityTypeLabelName, Value: "store"}}})
-	}
-
-	return labelSets
+	return s.advLabelSets
 }
 
 func (s *BucketStore) limitMinTime(mint int64) int64 {
@@ -1597,7 +1588,7 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, seriesSrv storepb.Store
 		stats            = &queryStats{}
 		respSets         []respSet
 		mtx              sync.Mutex
-		g, gctx          = errgroup.WithContext(ctx)
+		g, _             = errgroup.WithContext(ctx)
 		resHints         = &hintspb.SeriesResponseHints{}
 		reqBlockMatchers []*labels.Matcher
 
@@ -1616,7 +1607,7 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, seriesSrv storepb.Store
 		}
 		queryStatsEnabled = reqHints.EnableQueryStats
 
-		reqBlockMatchers, err = storepb.MatchersToPromMatchers(reqHints.BlockMatchers...)
+		reqBlockMatchers, err = storecache.MatchersToPromMatchersCached(s.matcherCache, reqHints.BlockMatchers...)
 		if err != nil {
 			return status.Error(codes.InvalidArgument, errors.Wrap(err, "translate request hints labels matchers").Error())
 		}
@@ -1648,7 +1639,6 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, seriesSrv storepb.Store
 
 		for _, b := range blocks {
 			blk := b
-			gctx := gctx
 
 			if s.enableSeriesResponseHints {
 				// Keep track of queried blocks.
@@ -1686,14 +1676,6 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, seriesSrv storepb.Store
 			defer blockClient.Close()
 
 			g.Go(func() error {
-
-				span, _ := tracing.StartSpan(gctx, "bucket_store_block_series", tracing.Tags{
-					"block.id":         blk.meta.ULID,
-					"block.mint":       blk.meta.MinTime,
-					"block.maxt":       blk.meta.MaxTime,
-					"block.resolution": blk.meta.Thanos.Downsample.Resolution,
-				})
-
 				onClose := func() {
 					mtx.Lock()
 					stats = blockClient.MergeStats(stats)
@@ -1705,14 +1687,12 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, seriesSrv storepb.Store
 					seriesLimiter,
 				); err != nil {
 					onClose()
-					span.Finish()
 					return errors.Wrapf(err, "fetch postings for block %s", blk.meta.ULID)
 				}
 
 				var resp respSet
 				if s.sortingStrategy == sortingStrategyStore {
 					resp = newEagerRespSet(
-						span,
 						10*time.Minute,
 						blk.meta.ULID.String(),
 						[]labels.Labels{blk.extLset},
@@ -1722,10 +1702,10 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, seriesSrv storepb.Store
 						false,
 						s.metrics.emptyPostingCount.WithLabelValues(tenant),
 						nil,
+						nil,
 					)
 				} else {
 					resp = newLazyRespSet(
-						span,
 						10*time.Minute,
 						blk.meta.ULID.String(),
 						[]labels.Labels{blk.extLset},
@@ -1735,6 +1715,7 @@ func (s *BucketStore) Series(req *storepb.SeriesRequest, seriesSrv storepb.Store
 						false,
 						s.metrics.emptyPostingCount.WithLabelValues(tenant),
 						max(s.lazyRetrievalMaxBufferedResponses, 1),
+						nil,
 					)
 				}
 
@@ -1879,7 +1860,7 @@ func chunksSize(chks []storepb.AggrChunk) (size int) {
 
 // LabelNames implements the storepb.StoreServer interface.
 func (s *BucketStore) LabelNames(ctx context.Context, req *storepb.LabelNamesRequest) (*storepb.LabelNamesResponse, error) {
-	reqSeriesMatchers, err := storepb.MatchersToPromMatchers(req.Matchers...)
+	reqSeriesMatchers, err := storecache.MatchersToPromMatchersCached(s.matcherCache, req.Matchers...)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, errors.Wrap(err, "translate request labels matchers").Error())
 	}
@@ -1896,7 +1877,7 @@ func (s *BucketStore) LabelNames(ctx context.Context, req *storepb.LabelNamesReq
 			return nil, status.Error(codes.InvalidArgument, errors.Wrap(err, "unmarshal label names request hints").Error())
 		}
 
-		reqBlockMatchers, err = storepb.MatchersToPromMatchers(reqHints.BlockMatchers...)
+		reqBlockMatchers, err = storecache.MatchersToPromMatchersCached(s.matcherCache, reqHints.BlockMatchers...)
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, errors.Wrap(err, "translate request hints labels matchers").Error())
 		}
@@ -2095,7 +2076,7 @@ func (b *bucketBlock) FilterExtLabelsMatchers(matchers []*labels.Matcher) ([]*la
 
 // LabelValues implements the storepb.StoreServer interface.
 func (s *BucketStore) LabelValues(ctx context.Context, req *storepb.LabelValuesRequest) (*storepb.LabelValuesResponse, error) {
-	reqSeriesMatchers, err := storepb.MatchersToPromMatchers(req.Matchers...)
+	reqSeriesMatchers, err := storecache.MatchersToPromMatchersCached(s.matcherCache, req.Matchers...)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, errors.Wrap(err, "translate request labels matchers").Error())
 	}
@@ -2125,7 +2106,7 @@ func (s *BucketStore) LabelValues(ctx context.Context, req *storepb.LabelValuesR
 			return nil, status.Error(codes.InvalidArgument, errors.Wrap(err, "unmarshal label values request hints").Error())
 		}
 
-		reqBlockMatchers, err = storepb.MatchersToPromMatchers(reqHints.BlockMatchers...)
+		reqBlockMatchers, err = storecache.MatchersToPromMatchersCached(s.matcherCache, reqHints.BlockMatchers...)
 		if err != nil {
 			return nil, status.Error(codes.InvalidArgument, errors.Wrap(err, "translate request hints labels matchers").Error())
 		}
@@ -2160,6 +2141,7 @@ func (s *BucketStore) LabelValues(ctx context.Context, req *storepb.LabelValuesR
 		if !hasMetricNameEqMatcher && len(reqSeriesMatchersNoExtLabels) > 0 && !b.extLset.Has(req.Label) {
 			m, err := labels.NewMatcher(labels.MatchNotEqual, req.Label, "")
 			if err != nil {
+				s.mtx.RUnlock()
 				return nil, status.Error(codes.InvalidArgument, err.Error())
 			}
 
@@ -2174,13 +2156,6 @@ func (s *BucketStore) LabelValues(ctx context.Context, req *storepb.LabelValuesR
 		indexr := b.indexReader(blockLogger)
 
 		g.Go(func() error {
-			span, newCtx := tracing.StartSpan(gctx, "bucket_store_block_label_values", tracing.Tags{
-				"block.id":         b.meta.ULID,
-				"block.mint":       b.meta.MinTime,
-				"block.maxt":       b.meta.MaxTime,
-				"block.resolution": b.meta.Thanos.Downsample.Resolution,
-			})
-			defer span.Finish()
 			defer runutil.CloseWithLogOnErr(blockLogger, indexr, "label values")
 
 			var result []string
@@ -2204,7 +2179,7 @@ func (s *BucketStore) LabelValues(ctx context.Context, req *storepb.LabelValuesR
 					WithoutReplicaLabels: req.WithoutReplicaLabels,
 				}
 				blockClient := newBlockSeriesClient(
-					newCtx,
+					gctx,
 					blockLogger,
 					b,
 					seriesReq,

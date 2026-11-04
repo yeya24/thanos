@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding"
+	_ "google.golang.org/grpc/health"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/mem"
 
@@ -38,18 +39,17 @@ func (n *nonPoolingCodec) Name() string {
 	return "proto"
 }
 
-var nopPool = mem.NopBufferPool{}
-
 func (n *nonPoolingCodec) Unmarshal(data mem.BufferSlice, v any) error {
 	gmsg, ok := v.(gogoMsg)
 	if !ok {
 		return n.CodecV2.Unmarshal(data, v)
 	}
 
-	// TODO(GiedriusS): we use unsafe code around labels so we cannot use pooling here.
-	buf := data.MaterializeToBuffer(nopPool)
-
-	return gmsg.Unmarshal(buf.ReadOnlyData())
+	buf, free := materializeForUnmarshal(data)
+	if free != nil {
+		defer free()
+	}
+	return gmsg.Unmarshal(buf)
 }
 
 type gogoMsg interface {
@@ -82,16 +82,30 @@ func (c *nonPoolingCodec) Marshal(v any) (mem.BufferSlice, error) {
 // For details on retry capabilities, see https://github.com/grpc/proposal/blob/master/A6-client-retries.md#retry-policy-capabilities
 func EndpointGroupGRPCOpts(serviceConfig string) []grpc.DialOption {
 	if serviceConfig == "" {
+		// NOTE: healthCheckConfig enables client-side gRPC health checking (opening a single
+		// long-lived grpc.health.v1.Health/Watch stream per subchannel) so round_robin skips
+		// NOT_SERVING backends in an endpoint group. Setting serviceName to "" watches the
+		// overall server health rather than an individual gRPC service, matching how Thanos
+		// servers report readiness via SetServingStatus("", ...) in pkg/prober/grpc.go.
 		serviceConfig = `
 {
-  "loadBalancingPolicy":"round_robin",
-  "retryPolicy": {
-    "maxAttempts": 3,
-    "initialBackoff": "0.1s",
-    "backoffMultiplier": 2,
-    "retryableStatusCodes": [
-  	  "UNAVAILABLE"
-    ]
+  "loadBalancingPolicy": "round_robin",
+  "methodConfig": [
+    {
+      "name": [{}],
+      "retryPolicy": {
+        "maxAttempts": 5,
+        "initialBackoff": "0.2s",
+        "maxBackoff": "1s",
+        "backoffMultiplier": 2,
+        "retryableStatusCodes": [
+          "UNAVAILABLE"
+        ]
+      }
+    }
+  ],
+  "healthCheckConfig": {
+    "serviceName": ""
   }
 }`
 	}
@@ -104,7 +118,7 @@ func EndpointGroupGRPCOpts(serviceConfig string) []grpc.DialOption {
 }
 
 // StoreClientGRPCOpts creates gRPC dial options for connecting to a store client.
-func StoreClientGRPCOpts(logger log.Logger, reg prometheus.Registerer, tracer opentracing.Tracer, secure, skipVerify bool, cert, key, caCert, serverName string) ([]grpc.DialOption, error) {
+func StoreClientGRPCOpts(logger log.Logger, reg prometheus.Registerer, tracer opentracing.Tracer) ([]grpc.DialOption, error) {
 	grpcMets := grpc_prometheus.NewClientMetrics(
 		grpc_prometheus.WithClientHandlingTimeHistogram(grpc_prometheus.WithHistogramOpts(
 			&prometheus.HistogramOpts{
@@ -136,15 +150,20 @@ func StoreClientGRPCOpts(logger log.Logger, reg prometheus.Registerer, tracer op
 		reg.MustRegister(grpcMets)
 	}
 
+	return dialOpts, nil
+
+}
+
+func StoreClientTLSCredentials(logger log.Logger, secure, skipVerify bool, cert, key, caCert, serverName, minTLSVersion string) (grpc.DialOption, error) {
 	if !secure {
-		return append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials())), nil
+		return grpc.WithTransportCredentials(insecure.NewCredentials()), nil
 	}
 
-	level.Info(logger).Log("msg", "enabling client to server TLS")
+	level.Debug(logger).Log("msg", "enabling client to server TLS")
 
-	tlsCfg, err := tls.NewClientConfig(logger, cert, key, caCert, serverName, skipVerify)
+	tlsCfg, err := tls.NewClientConfig(logger, cert, key, caCert, serverName, skipVerify, minTLSVersion)
 	if err != nil {
 		return nil, err
 	}
-	return append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg))), nil
+	return grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)), nil
 }

@@ -21,8 +21,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"go.uber.org/atomic"
 	"gopkg.in/yaml.v3"
 
 	"github.com/alecthomas/units"
@@ -30,6 +32,7 @@ import (
 	"github.com/go-kit/log"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
+	"github.com/jpillora/backoff"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/model"
@@ -39,9 +42,12 @@ import (
 	prometheusMetadata "github.com/prometheus/prometheus/model/metadata"
 	"github.com/prometheus/prometheus/model/relabel"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/storage/remote"
 	"github.com/prometheus/prometheus/tsdb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/thanos-io/thanos/pkg/block/metadata"
@@ -52,6 +58,7 @@ import (
 	"github.com/thanos-io/thanos/pkg/store/labelpb"
 	"github.com/thanos-io/thanos/pkg/store/storepb"
 	"github.com/thanos-io/thanos/pkg/store/storepb/prompb"
+	writev2 "github.com/thanos-io/thanos/pkg/store/storepb/prompb/io/prometheus/write/v2"
 	"github.com/thanos-io/thanos/pkg/tenancy"
 )
 
@@ -227,7 +234,32 @@ func (g *fakePeersGroup) getConnection(_ context.Context, endpoint Endpoint) (Wr
 
 var _ = (peersContainer)(&fakePeersGroup{})
 
+// localTestWriter mirrors production's localAsyncWriter (writes straight to the
+// local TSDB, wrapping errors with errors.Wrap so conflict classification works)
+// but resolves the handler's writer at call time. Some tests swap handler.writer
+// after the harness is built (e.g. the MultiTSDB benchmark), and the old local
+// write path read h.writer dynamically, so we preserve that behavior here.
+type localTestWriter struct {
+	h *Handler
+}
+
+func (w *localTestWriter) Close() error { return nil }
+
+func (w *localTestWriter) RemoteWrite(ctx context.Context, in *storepb.WriteRequest, _ ...grpc.CallOption) (*storepb.WriteResponse, error) {
+	if len(in.TimeseriesTenantData) == 0 {
+		panic("BUG: localTestWriter.RemoteWrite called without TimeseriesTenantData")
+	}
+
+	for _, ts := range in.TimeseriesTenantData {
+		if err := w.h.writer.Write(ctx, ts.Tenant, ts.Timeseries); err != nil {
+			return nil, errors.Wrap(err, "writing locally")
+		}
+	}
+	return &storepb.WriteResponse{}, nil
+}
+
 func newTestHandlerHashring(
+	debugName string,
 	appendables []*fakeAppendable,
 	replicationFactor uint64,
 	hashringAlgo HashringAlgorithm,
@@ -238,17 +270,21 @@ func newTestHandlerHashring(
 		handlers []*Handler
 		wOpts    = &WriterOptions{}
 	)
-	fakePeers := &fakePeersGroup{
-		clients: map[Endpoint]*peerWorker{},
-	}
 
 	var (
 		closers = make([]func() error, 0)
 
-		ag         = addrGen{}
-		logger, _  = logging.NewLogger("debug", "logfmt", "receive_test")
+		logger, _  = logging.NewLogger("debug", "logfmt", debugName)
 		limiter, _ = NewLimiter(extkingpin.NewNopConfig(), nil, RouterIngestor, log.NewNopLogger(), 1*time.Second)
 	)
+
+	// remoteClients models delivery of a write to the handler that owns an
+	// endpoint. It is only ever used by *other* handlers: a handler's own
+	// endpoint is served by a local writer below (mirroring production's
+	// localAsyncWriter), so that local writes terminate at the TSDB instead of
+	// looping back into the same handler's worker pool and deadlocking.
+	endpoints := make([]Endpoint, len(appendables))
+	remoteClients := make(map[Endpoint]*peerWorker, len(appendables))
 	for i := range appendables {
 		h := NewHandler(logger, &Options{
 			TenantHeader:      tenancy.DefaultTenantHeader,
@@ -259,9 +295,9 @@ func newTestHandlerHashring(
 			Limiter:           limiter,
 		})
 		handlers = append(handlers, h)
-		h.peers = fakePeers
-		endpoint := ag.newEndpoint()
+		endpoint := newUniqueEndpoint()
 		h.options.Endpoint = endpoint.Address
+		endpoints[i] = endpoint
 		cfg[0].Endpoints = append(cfg[0].Endpoints, endpoint)
 
 		var peer *peerWorker
@@ -269,7 +305,7 @@ func newTestHandlerHashring(
 			writer := NewCapNProtoWriter(logger, newFakeTenantAppendable(appendables[i]), nil)
 			var (
 				listener = bufconn.Listen(1024)
-				handler  = NewCapNProtoHandler(log.NewNopLogger(), writer)
+				handler  = NewCapNProtoHandler(prometheus.NewRegistry(), log.NewNopLogger(), writer, limiter)
 			)
 			srv := NewCapNProtoServer(listener, handler, log.NewNopLogger())
 			client := writecapnp.NewRemoteWriteClient(listener, logger)
@@ -282,8 +318,23 @@ func newTestHandlerHashring(
 		} else {
 			peer = newPeerWorker(&fakeRemoteWriteGRPCServer{h: h}, prometheus.NewHistogram(prometheus.HistogramOpts{}), 1, 0)
 		}
-		fakePeers.clients[endpoint] = peer
+		remoteClients[endpoint] = peer
 	}
+
+	// Give each handler its own peers view: its own endpoint resolves to a local
+	// writer, every other endpoint resolves to the shared remote-delivery worker.
+	for i, h := range handlers {
+		clients := make(map[Endpoint]*peerWorker, len(endpoints))
+		for j, endpoint := range endpoints {
+			if i == j {
+				clients[endpoint] = newPeerWorker(&localTestWriter{h: h}, prometheus.NewHistogram(prometheus.HistogramOpts{}), 1, 0)
+			} else {
+				clients[endpoint] = remoteClients[endpoint]
+			}
+		}
+		h.peers = &fakePeersGroup{clients: clients}
+	}
+
 	// Use hashmod as default.
 	if hashringAlgo == "" {
 		hashringAlgo = AlgorithmHashmod
@@ -336,7 +387,7 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 		},
 		{
 			name:              "size 1 commit error",
-			status:            http.StatusInternalServerError,
+			status:            http.StatusServiceUnavailable,
 			replicationFactor: 1,
 			wreq:              wreq,
 			appendables: []*fakeAppendable{
@@ -406,7 +457,7 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 		},
 		{
 			name:              "size 3 commit error",
-			status:            http.StatusInternalServerError,
+			status:            http.StatusServiceUnavailable,
 			replicationFactor: 1,
 			wreq:              wreq,
 			appendables: []*fakeAppendable{
@@ -423,7 +474,7 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 		},
 		{
 			name:              "size 3 commit error with replication",
-			status:            http.StatusInternalServerError,
+			status:            http.StatusServiceUnavailable,
 			replicationFactor: 3,
 			wreq:              wreq,
 			appendables: []*fakeAppendable{
@@ -440,7 +491,7 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 		},
 		{
 			name:              "size 3 appender error with replication",
-			status:            http.StatusInternalServerError,
+			status:            http.StatusServiceUnavailable,
 			replicationFactor: 3,
 			wreq:              wreq,
 			appendables: []*fakeAppendable{
@@ -561,8 +612,28 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 			},
 		},
 		{
+			// cce: two permanent conflicts + one generic error. Even if the
+			// error node recovers, the best possible outcome is 1 success +
+			// 2 conflicts which cannot reach quorum of 2. Must return 409.
+			name:              "size 3 with replication two conflicts and one commit error",
+			status:            http.StatusConflict,
+			replicationFactor: 3,
+			wreq:              wreq,
+			appendables: []*fakeAppendable{
+				{
+					appender: newFakeAppender(conflictErrFn, nil, nil),
+				},
+				{
+					appender: newFakeAppender(conflictErrFn, nil, nil),
+				},
+				{
+					appender: newFakeAppender(nil, commitErrFn, nil),
+				},
+			},
+		},
+		{
 			name:              "size 3 with replication one conflict and one commit error",
-			status:            http.StatusInternalServerError,
+			status:            http.StatusServiceUnavailable,
 			replicationFactor: 3,
 			wreq:              wreq,
 			appendables: []*fakeAppendable{
@@ -579,7 +650,7 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 		},
 		{
 			name:              "size 3 with replication two commit errors",
-			status:            http.StatusInternalServerError,
+			status:            http.StatusServiceUnavailable,
 			replicationFactor: 3,
 			wreq:              wreq,
 			appendables: []*fakeAppendable{
@@ -622,7 +693,7 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 		},
 		{
 			name:              "size 6 with replication 3 one commit and two conflict error",
-			status:            http.StatusConflict,
+			status:            http.StatusServiceUnavailable,
 			replicationFactor: 3,
 			wreq:              wreq,
 			appendables: []*fakeAppendable{
@@ -674,7 +745,7 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handlers, hashring, closeFunc, err := newTestHandlerHashring(tc.appendables, tc.replicationFactor, hashringAlgo, capnpReplication)
+			handlers, hashring, closeFunc, err := newTestHandlerHashring(tc.name, tc.appendables, tc.replicationFactor, hashringAlgo, capnpReplication)
 			if err != nil {
 				t.Fatalf("unable to create test handler: %v", err)
 			}
@@ -708,46 +779,37 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 					if err != nil {
 						t.Fatalf("handler %d: unexpectedly failed making HTTP request: %v", i+1, err)
 					}
-					// TODO(GiedriusS): fix this for gRPC replication too.
-					if capnpReplication {
-						if rec.Code == 503 {
-							rec.Code = 500
-						}
-					}
 					if rec.Code != tc.status {
 						t.Errorf("handler %d: got unexpected HTTP status code: expected %d, got %d; body: %s", i+1, tc.status, rec.Code, rec.Body.String())
 					}
 				}
 			}
 
-			if withConsistencyDelay {
-				time.Sleep(50 * time.Millisecond)
-			}
+			// Replicas beyond quorum are written best-effort and land asynchronously
+			// after the HTTP response returns, so poll until every fake DB holds the
+			// expected number of samples rather than checking exactly once.
+			verify := func() error {
+				var errs []error
+				for _, ts := range tc.wreq.Timeseries {
+					lset := labelpb.ZLabelsToPromLabels(ts.Labels)
+					for j, a := range tc.appendables {
+						got := uint64(len(a.appender.(*fakeAppender).Get(lset)))
+						hit := a.appenderErr == nil && endpointHit(t, hashring, tc.replicationFactor, handlers[j].options.Endpoint, tenant, &ts)
+						if withConsistencyDelay && tc.status == http.StatusOK {
+							var expected int
+							if hit {
+								// We have len(handlers) copies of each sample because the test case
+								// is run once for each handler and they all use the same appender.
+								expected = len(handlers) * len(ts.Samples)
+							}
+							if uint64(expected) != got {
+								errs = append(errs, fmt.Errorf("handler: %d, labels %q: expected %d samples, got %d", j, lset.String(), expected, got))
+							}
+							continue
+						}
 
-			// Test that each time series is stored
-			// the correct amount of times in each fake DB.
-			for _, ts := range tc.wreq.Timeseries {
-				lset := labelpb.ZLabelsToPromLabels(ts.Labels)
-				for j, a := range tc.appendables {
-					if withConsistencyDelay && tc.status == http.StatusOK {
-						var expected int
-						n := a.appender.(*fakeAppender).Get(lset)
-						got := uint64(len(n))
-						if a.appenderErr == nil && endpointHit(t, hashring, tc.replicationFactor, handlers[j].options.Endpoint, tenant, &ts) {
-							// We have len(handlers) copies of each sample because the test case
-							// is run once for each handler and they all use the same appender.
-							expected = len(handlers) * len(ts.Samples)
-						}
-						if uint64(expected) != got {
-							t.Errorf("handler: %d, labels %q: expected %d samples, got %d", j, lset.String(), expected, got)
-						}
-					} else {
 						var expectedMin int
-						n := a.appender.(*fakeAppender).Get(lset)
-						got := uint64(len(n))
-						if a.appenderErr == nil && endpointHit(t, hashring, tc.replicationFactor, handlers[j].options.Endpoint, tenant, &ts) {
-							// We have len(handlers) copies of each sample because the test case
-							// is run once for each handler and they all use the same appender.
+						if hit {
 							expectedMin = int((tc.replicationFactor/2)+1) * len(ts.Samples)
 							if tc.randomNode {
 								expectedMin = len(ts.Samples)
@@ -760,11 +822,17 @@ func testReceiveQuorum(t *testing.T, hashringAlgo HashringAlgorithm, withConsist
 							}
 						}
 						if uint64(expectedMin) > got {
-							t.Errorf("handler: %d, labels %q: expected minimum of %d samples, got %d", j, lset.String(), expectedMin, got)
+							errs = append(errs, fmt.Errorf("handler: %d, labels %q: expected minimum of %d samples, got %d", j, lset.String(), expectedMin, got))
 						}
 					}
-
 				}
+				return goerrors.Join(errs...)
+			}
+
+			verifyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := runutil.Retry(50*time.Millisecond, verifyCtx.Done(), verify); err != nil {
+				t.Error(err)
 			}
 		})
 	}
@@ -788,6 +856,92 @@ func TestReceiveQuorumKetama(t *testing.T) {
 			testReceiveQuorum(t, AlgorithmKetama, false, capnpReplication)
 		})
 	}
+}
+
+// TestReceiveSaturatedPoolRF2 verifies that with replication factor 2 (quorum=1)
+// writes don't block when one peer's worker pool is saturated.
+func TestReceiveSaturatedPoolRF2(t *testing.T) {
+	t.Parallel()
+
+	fakePeers := &fakePeersGroup{clients: map[Endpoint]*peerWorker{}}
+	limiter, err := NewLimiter(extkingpin.NewNopConfig(), nil, RouterIngestor, log.NewNopLogger(), 1*time.Second)
+	require.NoError(t, err)
+
+	app := &fakeAppendable{
+		appender: newFakeAppender(nil, nil, nil),
+	}
+
+	h := NewHandler(log.NewNopLogger(), &Options{
+		ReplicationFactor: 2,
+		ForwardTimeout:    100 * time.Second,
+		Writer:            NewWriter(log.NewNopLogger(), newFakeTenantAppendable(app), &WriterOptions{}),
+		Limiter:           limiter,
+		Endpoint:          newUniqueEndpoint().String(),
+	})
+
+	endpoints := []Endpoint{
+		{
+			Address: newUniqueEndpoint().String(),
+		},
+		{
+			Address: newUniqueEndpoint().String(),
+		},
+	}
+
+	cfg := []HashringConfig{{
+		Hashring:  "test",
+		Endpoints: endpoints,
+	}}
+
+	hashring, err := NewMultiHashring(AlgorithmHashmod, 2, cfg, prometheus.NewRegistry())
+	require.NoError(t, err)
+
+	h.Hashring(hashring)
+	h.peers = fakePeers
+
+	synctest.Test(t, func(t *testing.T) {
+		t.Cleanup(func() { require.NoError(t, fakePeers.Close()) })
+
+		fakePeers.clients[endpoints[0]] = newPeerWorker(
+			&alwaysSucceedClient{},
+			prometheus.NewHistogram(prometheus.HistogramOpts{}),
+			1, 0,
+		)
+
+		fakePeers.clients[endpoints[1]] = newPeerWorker(
+			&alwaysSucceedClient{},
+			prometheus.NewHistogram(prometheus.HistogramOpts{}),
+			1, 30*time.Second,
+		)
+
+		wreq := &storepb.WriteRequest{Timeseries: makeSeriesWithValues(1)}
+		go func() {
+			for range 500 {
+				_, err := h.RemoteWrite(t.Context(), wreq)
+				require.NoError(t, err)
+			}
+		}()
+
+		_, err := h.RemoteWrite(t.Context(), wreq)
+		require.NoError(t, err)
+
+		time.Sleep(10 * time.Minute)
+		synctest.Wait()
+
+		// NOTE(GiedriusS): waiting until the best-effort writers are done
+		// because the waiting is happening in a goroutine.
+		require.NoError(t, runutil.Retry(10*time.Millisecond, t.Context().Done(), func() error {
+			laggyPool := fakePeers.clients[endpoints[1]].wp
+
+			r := laggyPool.TryGo(func() {})
+			if !r {
+				return fmt.Errorf("pool still busy")
+			}
+
+			return nil
+		}))
+	})
+
 }
 
 func TestReceiveWithConsistencyDelayHashmod(t *testing.T) {
@@ -874,7 +1028,7 @@ func TestReceiveWriteRequestLimits(t *testing.T) {
 					appender: newFakeAppender(nil, nil, nil),
 				},
 			}
-			handlers, _, closeFunc, err := newTestHandlerHashring(appendables, 3, AlgorithmHashmod, false)
+			handlers, _, closeFunc, err := newTestHandlerHashring(tc.name, appendables, 3, AlgorithmHashmod, false)
 			if err != nil {
 				t.Fatalf("unable to create test handler: %v", err)
 			}
@@ -941,6 +1095,81 @@ func TestReceiveWriteRequestLimits(t *testing.T) {
 	}
 }
 
+func TestReceiveTenantValidation(t *testing.T) {
+	t.Parallel()
+
+	const tenantLabelName = "thanos_tenant_id"
+
+	for _, tc := range []struct {
+		name         string
+		tenantHeader string
+		tenantLabel  string
+		status       int
+	}{
+		{
+			name:         "Tenant from label validation fails",
+			tenantHeader: "tenant-a",
+			tenantLabel:  "../malicious",
+			status:       http.StatusBadRequest,
+		},
+		{
+			name:         "Tenant from header validation fails",
+			tenantHeader: "../malicious",
+			status:       http.StatusBadRequest,
+		},
+		{
+			name:         "Valid tenant from header and label succeeds",
+			tenantHeader: "tenant-a",
+			tenantLabel:  "tenant-b",
+			status:       http.StatusOK,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+
+			appendables := []*fakeAppendable{
+				{
+					appender: newFakeAppender(nil, nil, nil),
+				},
+			}
+
+			handlers, _, closeFunc, err := newTestHandlerHashring(tc.name, appendables, 1, AlgorithmHashmod, false)
+			if err != nil {
+				t.Fatalf("unable to create test handler: %v", err)
+			}
+			defer func() {
+				testutil.Ok(t, closeFunc())
+				// Wait a few milliseconds for peer workers to process the queue.
+				time.AfterFunc(50*time.Millisecond, func() {
+					for _, h := range handlers {
+						h.Close()
+					}
+				})
+			}()
+
+			h := handlers[0]
+			h.splitTenantLabelName = tenantLabelName
+
+			wreq := &prompb.WriteRequest{
+				Timeseries: []prompb.TimeSeries{
+					{
+						Labels: []labelpb.ZLabel{
+							{Name: "__name__", Value: "test_metric"},
+							{Name: tenantLabelName, Value: tc.tenantLabel},
+						},
+						Samples: []prompb.Sample{
+							{Value: 1, Timestamp: time.Now().UnixMilli()},
+						},
+					},
+				},
+			}
+
+			rec, err := makeRequest(h, tc.tenantHeader, wreq)
+			testutil.Ok(t, err)
+			testutil.Equals(t, tc.status, rec.Code)
+		})
+	}
+}
+
 // endpointHit is a helper to determine if a given endpoint in a hashring would be selected
 // for a given time series, tenant, and replication factor.
 func endpointHit(t *testing.T, h Hashring, rf uint64, endpoint, tenant string, timeSeries *prompb.TimeSeries) bool {
@@ -955,6 +1184,14 @@ func endpointHit(t *testing.T, h Hashring, rf uint64, endpoint, tenant string, t
 	}
 	return false
 }
+
+type alwaysSucceedClient struct{}
+
+func (a *alwaysSucceedClient) RemoteWrite(_ context.Context, _ *storepb.WriteRequest, _ ...grpc.CallOption) (*storepb.WriteResponse, error) {
+	return &storepb.WriteResponse{}, nil
+}
+
+func (a *alwaysSucceedClient) Close() error { return nil }
 
 // cycleErrors returns an error generator that cycles through every given error.
 func cycleErrors(errs []error) func() error {
@@ -991,11 +1228,11 @@ func makeRequest(h *Handler, tenant string, wreq *prompb.WriteRequest) (*httptes
 	return rec, nil
 }
 
-type addrGen struct{ n int }
+var n atomic.Int64
 
-func (a *addrGen) newEndpoint() Endpoint {
-	a.n++
-	addr := fmt.Sprintf("http://node-%d:%d", a.n, 12345+a.n)
+func newUniqueEndpoint() Endpoint {
+	cur := n.Inc()
+	addr := fmt.Sprintf("http://node-%d:%d", cur, 12345+cur)
 	return Endpoint{
 		Address:          addr,
 		CapNProtoAddress: addr,
@@ -1018,6 +1255,11 @@ func (f *fakeRemoteWriteGRPCServer) RemoteWriteAsync(ctx context.Context, in *st
 		seriesIDs: seriesIDs,
 	}
 	cb(err)
+}
+
+func (f *fakeRemoteWriteGRPCServer) TryRemoteWriteAsync(ctx context.Context, in *storepb.WriteRequest, er endpointReplica, seriesIDs []int, responses chan writeResponse, cb func(error)) bool {
+	f.RemoteWriteAsync(ctx, in, er, seriesIDs, responses, cb)
+	return true
 }
 
 func (f *fakeRemoteWriteGRPCServer) Close() error { return nil }
@@ -1119,12 +1361,15 @@ func makeSeriesWithValues(numSeries int) []prompb.TimeSeries {
 func benchmarkHandlerMultiTSDBReceiveRemoteWrite(b testutil.TB) {
 	dir := b.TempDir()
 
-	handlers, _, closeFunc, err := newTestHandlerHashring([]*fakeAppendable{nil}, 1, AlgorithmHashmod, false)
+	handlers, _, closeFunc, err := newTestHandlerHashring("benchmark_handler", []*fakeAppendable{nil}, 1, AlgorithmHashmod, false)
 	if err != nil {
 		b.Fatalf("unable to create test handler: %v", err)
 	}
 	defer func() {
 		testutil.Ok(b, closeFunc())
+		for _, h := range handlers {
+			h.Close()
+		}
 	}()
 	handler := handlers[0]
 
@@ -1132,7 +1377,7 @@ func benchmarkHandlerMultiTSDBReceiveRemoteWrite(b testutil.TB) {
 
 	logger := log.NewNopLogger()
 	m := NewMultiTSDB(
-		dir, logger, reg, &tsdb.Options{
+		openTestRoot(b, dir), logger, reg, &tsdb.Options{
 			MinBlockDuration:  int64(2 * time.Hour / time.Millisecond),
 			MaxBlockDuration:  int64(2 * time.Hour / time.Millisecond),
 			RetentionDuration: int64(6 * time.Hour / time.Millisecond),
@@ -1146,7 +1391,9 @@ func benchmarkHandlerMultiTSDBReceiveRemoteWrite(b testutil.TB) {
 		false,
 		metadata.NoneFunc,
 	)
-	defer func() { testutil.Ok(b, m.Close()) }()
+	b.Cleanup(func() {
+		m.Close()
+	})
 	handler.writer = NewWriter(logger, m, &WriterOptions{})
 
 	testutil.Ok(b, m.Flush())
@@ -1230,7 +1477,7 @@ func benchmarkHandlerMultiTSDBReceiveRemoteWrite(b testutil.TB) {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 
-				testutil.Ok(b, runutil.Retry(1*time.Second, ctx.Done(), func() error {
+				testutil.Ok(b, runutil.Retry(10*time.Millisecond, ctx.Done(), func() error {
 					_, err = app.Appender(ctx)
 					return err
 				}))
@@ -1257,7 +1504,7 @@ func benchmarkHandlerMultiTSDBReceiveRemoteWrite(b testutil.TB) {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 
-				testutil.Ok(b, runutil.Retry(1*time.Second, ctx.Done(), func() error {
+				testutil.Ok(b, runutil.Retry(10*time.Millisecond, ctx.Done(), func() error {
 					_, err = app.Appender(ctx)
 					return err
 				}))
@@ -1314,17 +1561,17 @@ func TestIsTenantValid(t *testing.T) {
 		{
 			name:        "test malicious tenant",
 			tenant:      "/etc/foo",
-			expectedErr: errors.New("Tenant name not valid"),
+			expectedErr: errors.New("tenant name not valid"),
 		},
 		{
 			name:        "test malicious tenant going out of receiver directory",
 			tenant:      "./../../hacker_dir",
-			expectedErr: errors.New("Tenant name not valid"),
+			expectedErr: errors.New("tenant name not valid"),
 		},
 		{
 			name:        "test slash-only tenant",
 			tenant:      "///",
-			expectedErr: errors.New("Tenant name not valid"),
+			expectedErr: errors.New("tenant name not valid"),
 		},
 		{
 			name:   "test default tenant",
@@ -1729,6 +1976,71 @@ func TestRelabel(t *testing.T) {
 	}
 }
 
+// TestRelabelWithUnsetValidationScheme verifies that relabel configs
+// unmarshalled from YAML (which leaves NameValidationScheme as
+// UnsetValidation) work correctly after Validate() is called.
+// This is a regression test for a panic in relabel.Process() when
+// NameValidationScheme is 0 (UnsetValidation).
+func TestRelabelWithUnsetValidationScheme(t *testing.T) {
+	t.Parallel()
+
+	// Simulate the YAML unmarshal path: construct configs WITHOUT
+	// setting NameValidationScheme (it defaults to 0 = UnsetValidation).
+	cfgs := []*relabel.Config{
+		{
+			SourceLabels: model.LabelNames{"src_label"},
+			TargetLabel:  "dst_label",
+			Regex:        relabel.MustNewRegexp("(.+)"),
+			Action:       relabel.Replace,
+			Replacement:  "$1",
+			// NOTE: NameValidationScheme intentionally NOT set, simulating YAML unmarshal.
+		},
+	}
+
+	// This is what cmd/thanos/receive.go now does after YAML unmarshal.
+	// Without this call, relabel.Process() panics on UnsetValidation.
+	for _, cfg := range cfgs {
+		testutil.Ok(t, cfg.Validate(model.LegacyValidation))
+	}
+
+	h := NewHandler(nil, &Options{
+		RelabelConfigs: cfgs,
+	})
+
+	wreq := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []labelpb.ZLabel{
+					{Name: "__name__", Value: "test_metric"},
+					{Name: "src_label", Value: "hello"},
+				},
+				Samples: []prompb.Sample{
+					{Timestamp: 0, Value: 1},
+				},
+			},
+		},
+	}
+
+	// This would panic before the fix.
+	h.relabel(&wreq)
+
+	expected := prompb.WriteRequest{
+		Timeseries: []prompb.TimeSeries{
+			{
+				Labels: []labelpb.ZLabel{
+					{Name: "__name__", Value: "test_metric"},
+					{Name: "dst_label", Value: "hello"},
+					{Name: "src_label", Value: "hello"},
+				},
+				Samples: []prompb.Sample{
+					{Timestamp: 0, Value: 1},
+				},
+			},
+		},
+	}
+	testutil.Equals(t, expected, wreq)
+}
+
 func TestGetStatsLimitParameter(t *testing.T) {
 	t.Parallel()
 
@@ -1792,13 +2104,13 @@ func TestHashringChangeCallsClose(t *testing.T) {
 			appender: newFakeAppender(nil, nil, nil),
 		},
 	}
-	allHandlers, _, closeFunc, err := newTestHandlerHashring(appendables, 3, AlgorithmHashmod, false)
+	allHandlers, _, closeFunc, err := newTestHandlerHashring("hashring_change_calls_close", appendables, 3, AlgorithmHashmod, false)
 	testutil.Ok(t, err)
 	testutil.Ok(t, closeFunc())
 
 	appendables = appendables[1:]
 
-	_, smallHashring, closeFunc, err := newTestHandlerHashring(appendables, 2, AlgorithmHashmod, false)
+	_, smallHashring, closeFunc, err := newTestHandlerHashring("hashring_change_calls_close_small", appendables, 2, AlgorithmHashmod, false)
 	testutil.Ok(t, err)
 	testutil.Ok(t, closeFunc())
 
@@ -1847,30 +2159,77 @@ func TestDistributeSeries(t *testing.T) {
 	hr := &hashringSeenTenants{Hashring: hashring}
 	h.Hashring(hr)
 
-	_, remote, err := h.distributeTimeseriesToReplicas(
-		"foo",
+	writes, err := h.distributeTimeseriesToReplicas(
 		[]uint64{0},
-		[]prompb.TimeSeries{
+		[]wreqTenantTuple{
 			{
-				Labels: labelpb.ZLabelsFromPromLabels(labels.FromStrings("a", "b", tenantIDLabelName, "bar")),
-			},
-			{
-				Labels: labelpb.ZLabelsFromPromLabels(labels.FromStrings("b", "a", tenantIDLabelName, "boo")),
+				tenant: "foo",
+				wreq: &prompb.WriteRequest{
+					Timeseries: []prompb.TimeSeries{
+						{
+							Labels: labelpb.ZLabelsFromPromLabels(labels.FromStrings("a", "b", tenantIDLabelName, "bar")),
+						},
+						{
+							Labels: labelpb.ZLabelsFromPromLabels(labels.FromStrings("b", "a", tenantIDLabelName, "boo")),
+						},
+					},
+				},
 			},
 		},
 	)
 	require.NoError(t, err)
-	require.Len(t, remote, 1)
-	require.Len(t, remote[endpointReplica{endpoint: endpoint, replica: 0}]["bar"].timeSeries, 1)
-	require.Len(t, remote[endpointReplica{endpoint: endpoint, replica: 0}]["boo"].timeSeries, 1)
+	require.Len(t, writes, 1)
+	require.Len(t, writes[endpointReplica{endpoint: endpoint, replica: 0}]["bar"].timeSeries, 1)
+	require.Len(t, writes[endpointReplica{endpoint: endpoint, replica: 0}]["boo"].timeSeries, 1)
 
-	require.Equal(t, 1, labelpb.ZLabelsToPromLabels(remote[endpointReplica{endpoint: endpoint, replica: 0}]["bar"].timeSeries[0].Labels).Len())
-	require.Equal(t, 1, labelpb.ZLabelsToPromLabels(remote[endpointReplica{endpoint: endpoint, replica: 0}]["boo"].timeSeries[0].Labels).Len())
+	require.Equal(t, 1, labelpb.ZLabelsToPromLabels(writes[endpointReplica{endpoint: endpoint, replica: 0}]["bar"].timeSeries[0].Labels).Len())
+	require.Equal(t, 1, labelpb.ZLabelsToPromLabels(writes[endpointReplica{endpoint: endpoint, replica: 0}]["boo"].timeSeries[0].Labels).Len())
 
 	require.Equal(t, map[string]struct{}{"bar": {}, "boo": {}}, hr.seenTenants)
 }
 
+type nopPeerClient struct{}
+
+func (nopPeerClient) RemoteWrite(context.Context, *storepb.WriteRequest, ...grpc.CallOption) (*storepb.WriteResponse, error) {
+	return &storepb.WriteResponse{}, nil
+}
+
+func (nopPeerClient) Close() error { return nil }
+
+func BenchmarkFanoutForward(b *testing.B) {
+	h := NewHandler(nil, &Options{
+		ReplicationFactor: 1,
+		ForwardTimeout:    time.Minute,
+	})
+	b.Cleanup(h.Close)
+
+	endpoint := Endpoint{Address: "http://localhost:9090"}
+	hashring, err := newSimpleHashring([]Endpoint{endpoint})
+	require.NoError(b, err)
+	h.peers = &fakePeersGroup{clients: map[Endpoint]*peerWorker{
+		endpoint: newPeerWorker(nopPeerClient{}, prometheus.NewHistogram(prometheus.HistogramOpts{}), 1, 0),
+	}}
+	h.Hashring(hashring)
+
+	params := remoteWriteParams{
+		data: []wreqTenantTuple{{
+			tenant: "bench",
+			wreq:   &prompb.WriteRequest{Timeseries: makeSeriesWithValues(1000)},
+		}},
+		replicas: []uint64{0},
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, err := h.fanoutForward(b.Context(), params)
+		require.NoError(b, err)
+	}
+}
+
 func TestHandlerSplitTenantLabelLocalWrite(t *testing.T) {
+	t.Parallel()
+
 	const tenantIDLabelName = "thanos_tenant_id"
 
 	appendable := &fakeAppendable{
@@ -1889,6 +2248,9 @@ func TestHandlerSplitTenantLabelLocalWrite(t *testing.T) {
 			&WriterOptions{},
 		),
 	})
+	// Local writes now flow through the peer worker pool, so the handler must be
+	// closed to stop its workers.
+	t.Cleanup(h.Close)
 
 	// initialize hashring with a single local endpoint matching the handler endpoint to force
 	// using local write
@@ -1958,14 +2320,19 @@ func TestHandlerFlippingHashrings(t *testing.T) {
 				return
 			}
 
-			_, err := h.handleRequest(ctx, 0, "test", &prompb.WriteRequest{
-				Timeseries: []prompb.TimeSeries{
-					{
-						Labels: labelpb.ZLabelsFromPromLabels(labels.FromStrings("foo", "bar")),
-						Samples: []prompb.Sample{
+			_, err := h.handleRequest(ctx, 0, []wreqTenantTuple{
+				{
+					tenant: "test",
+					wreq: &prompb.WriteRequest{
+						Timeseries: []prompb.TimeSeries{
 							{
-								Timestamp: time.Now().Unix(),
-								Value:     123,
+								Labels: labelpb.ZLabelsFromPromLabels(labels.FromStrings("foo", "bar")),
+								Samples: []prompb.Sample{
+									{
+										Timestamp: time.Now().Unix(),
+										Value:     123,
+									},
+								},
 							},
 						},
 					},
@@ -1997,4 +2364,740 @@ func TestHandlerFlippingHashrings(t *testing.T) {
 	<-time.After(1 * time.Second)
 	cancel()
 	wg.Wait()
+}
+
+// TestPeerGroupResetRace exercises peerGroup.reset() (called on the hashring
+// reload path under Handler.mtx) concurrently with the p.m-guarded accessors
+// that in-flight forward callbacks use (markPeerUnavailable, markPeerAvailable,
+// isPeerUp). reset() must take p.m or it races the peerStates map and
+// expBackoff. Run with -race to catch the regression.
+func TestPeerGroupResetRace(t *testing.T) {
+	t.Parallel()
+
+	endpoint := Endpoint{Address: "http://localhost:9090"}
+	p := &peerGroup{
+		peerStates: make(map[Endpoint]*retryState),
+		expBackoff: backoff.Backoff{
+			Factor: 2,
+			Min:    100 * time.Millisecond,
+			Max:    30 * time.Second,
+			Jitter: true,
+		},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(4)
+
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			p.reset()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			p.markPeerUnavailable(endpoint)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			p.markPeerAvailable(endpoint)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for range 1000 {
+			p.isPeerUp(endpoint)
+		}
+	}()
+
+	wg.Wait()
+}
+
+// fakeAlwaysOverLimitSeriesLimiter is a headSeriesLimiter that always reports the tenant as over limit.
+type fakeAlwaysOverLimitSeriesLimiter struct{}
+
+func (f *fakeAlwaysOverLimitSeriesLimiter) QueryMetaMonitoring(_ context.Context) error { return nil }
+func (f *fakeAlwaysOverLimitSeriesLimiter) isUnderLimit(_ string) (bool, error)         { return false, nil }
+
+// fakeUnavailableRemoteWriteClient is a WriteableStoreAsyncClient that always returns codes.Unavailable.
+type fakeUnavailableRemoteWriteClient struct{}
+
+func (f *fakeUnavailableRemoteWriteClient) RemoteWrite(_ context.Context, _ *storepb.WriteRequest, _ ...grpc.CallOption) (*storepb.WriteResponse, error) {
+	return nil, status.Error(codes.Unavailable, "peer unavailable")
+}
+
+func (f *fakeUnavailableRemoteWriteClient) RemoteWriteAsync(_ context.Context, _ *storepb.WriteRequest, er endpointReplica, seriesIDs []int, responses chan writeResponse, cb func(error)) {
+	err := status.Error(codes.Unavailable, "peer unavailable")
+	responses <- writeResponse{er: er, err: err, seriesIDs: seriesIDs}
+	cb(err)
+}
+
+func (f *fakeUnavailableRemoteWriteClient) Close() error { return nil }
+
+// TestRetryAfterHeaderOnActiveSeriesLimitExceeded verifies that the Retry-After header is set
+// when a tenant exceeds the active-series limit (429 Too Many Requests).
+// synctest.Test controls fake time so t.Parallel() is not used.
+func TestRetryAfterHeaderOnActiveSeriesLimitExceeded(t *testing.T) {
+	const backoff = 10 * time.Second
+
+	appendable := &fakeAppendable{appender: newFakeAppender(nil, nil, nil)}
+	limiter, err := NewLimiter(extkingpin.NewNopConfig(), nil, RouterIngestor, log.NewNopLogger(), 1*time.Second)
+	require.NoError(t, err)
+
+	h := NewHandler(log.NewNopLogger(), &Options{
+		TenantHeader:      tenancy.DefaultTenantHeader,
+		ReplicaHeader:     DefaultReplicaHeader,
+		ReplicationFactor: 1,
+		ForwardTimeout:    5 * time.Second,
+		Writer:            NewWriter(log.NewNopLogger(), newFakeTenantAppendable(appendable), &WriterOptions{}),
+		Limiter:           limiter,
+		RetryAfterBackoff: backoff,
+		RetryAfterJitter:  0,
+	})
+
+	// Replace the head series limiter with one that always reports over-limit.
+	h.Limiter.headSeriesLimiterMtx.Lock()
+	h.Limiter.headSeriesLimiter = &fakeAlwaysOverLimitSeriesLimiter{}
+	h.Limiter.headSeriesLimiterMtx.Unlock()
+
+	hashring, err := newSimpleHashring([]Endpoint{{Address: "http://localhost:12345"}})
+	require.NoError(t, err)
+	h.Hashring(hashring)
+	h.options.Endpoint = "http://localhost:12345"
+
+	wreq := &prompb.WriteRequest{Timeseries: makeSeriesWithValues(1)}
+
+	synctest.Test(t, func(t *testing.T) {
+		rec, reqErr := makeRequest(h, "test-tenant", wreq)
+		require.NoError(t, reqErr)
+
+		require.Equal(t, http.StatusTooManyRequests, rec.Code)
+		require.Equal(t, time.Now().UTC().Add(backoff).Format(http.TimeFormat), rec.Header().Get("Retry-After"))
+	})
+}
+
+// TestRetryAfterHeaderOnQuorumUnavailable verifies that the Retry-After header is set
+// when a write fails due to quorum being unavailable (503 Service Unavailable).
+// synctest.Test controls fake time so t.Parallel() is not used.
+func TestRetryAfterHeaderOnQuorumUnavailable(t *testing.T) {
+	const backoff = 10 * time.Second
+
+	appendables := []*fakeAppendable{
+		{appender: newFakeAppender(nil, nil, nil)},
+		{appender: newFakeAppender(nil, nil, nil)},
+		{appender: newFakeAppender(nil, nil, nil)},
+	}
+
+	handlers, _, closeFunc, err := newTestHandlerHashring("retry_after_quorum_unavailable", appendables, 3, AlgorithmHashmod, false)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, closeFunc())
+		for _, hh := range handlers {
+			hh.Close()
+		}
+	}()
+
+	for _, hh := range handlers {
+		hh.options.RetryAfterBackoff = backoff
+		hh.options.RetryAfterJitter = 0
+	}
+
+	wreq := &prompb.WriteRequest{Timeseries: makeSeriesWithValues(1)}
+
+	synctest.Test(t, func(t *testing.T) {
+		// The peer workers must be created and closed inside the bubble: their
+		// goroutines only exit on Close(), and they pass work over channels that
+		// cannot cross the bubble boundary.
+		unavailableClient := newPeerWorker(&fakeUnavailableRemoteWriteClient{}, prometheus.NewHistogram(prometheus.HistogramOpts{}), 1, 0)
+		t.Cleanup(unavailableClient.wp.Close)
+
+		// Replace every peer connection with a client that always returns codes.Unavailable,
+		// so that quorum (2 out of 3) can never be reached when replicating.
+		for _, hh := range handlers {
+			pg := hh.peers.(*fakePeersGroup)
+			for endpoint := range pg.clients {
+				pg.clients[endpoint] = unavailableClient
+			}
+		}
+
+		for i, hh := range handlers {
+			rec, reqErr := makeRequest(hh, "test-tenant", wreq)
+			require.NoError(t, reqErr)
+
+			if rec.Code != http.StatusServiceUnavailable {
+				// Not all nodes will necessarily return 503 (depends on hashing), skip those that don't.
+				continue
+			}
+
+			require.Equalf(t, time.Now().UTC().Add(backoff).Format(http.TimeFormat), rec.Header().Get("Retry-After"), "handler %d", i)
+		}
+	})
+}
+
+func TestDetermineRWVersion(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name        string
+		contentType string
+		rwVersion   string
+		wantVer     int
+		wantMode    string
+		wantErr     bool
+	}{
+		{
+			name:    "empty headers defaults to v1",
+			wantVer: 1,
+		},
+		{
+			name:        "v1 content-type without proto",
+			contentType: "application/x-protobuf",
+			wantVer:     1,
+		},
+		{
+			name:        "v1 content-type with proto",
+			contentType: "application/x-protobuf;proto=prometheus.WriteRequest",
+			wantVer:     1,
+		},
+		{
+			name:        "v2 default mode",
+			contentType: "application/x-protobuf;proto=io.prometheus.write.v2.Request",
+			wantVer:     2,
+		},
+		{
+			name:        "v2 explicit mode=none",
+			contentType: "application/x-protobuf;proto=io.prometheus.write.v2.Request;mode=none",
+			wantVer:     2,
+			wantMode:    "none",
+		},
+		{
+			name:        "v2 mode=stateless",
+			contentType: "application/x-protobuf;proto=io.prometheus.write.v2.Request;mode=stateless",
+			wantVer:     2,
+			wantMode:    "stateless",
+		},
+		{
+			name:        "v2 mode=stateless-st",
+			contentType: "application/x-protobuf;proto=io.prometheus.write.v2.Request;mode=stateless-st",
+			wantVer:     2,
+			wantMode:    "stateless-st",
+		},
+		{
+			name:        "v2 RFC 9110 whitespace, uppercase params, quoted values, reordered",
+			contentType: `application/x-protobuf; MODE="stateless-st"; PROTO="io.prometheus.write.v2.Request"`,
+			wantVer:     2,
+			wantMode:    "stateless-st",
+		},
+		{
+			name:      "v2 version header without content-type fails",
+			rwVersion: "2.0.0",
+			wantErr:   true,
+		},
+		{
+			name:        "unsupported media type",
+			contentType: "application/json",
+			wantErr:     true,
+		},
+		{
+			name:        "unsupported proto",
+			contentType: "application/x-protobuf;proto=unsupported.Message",
+			wantErr:     true,
+		},
+		{
+			name:        "empty proto",
+			contentType: "application/x-protobuf;proto=",
+			wantErr:     true,
+		},
+		{
+			name:        "unsupported mode",
+			contentType: "application/x-protobuf;proto=io.prometheus.write.v2.Request;mode=unknown",
+			wantErr:     true,
+		},
+		{
+			name:        "empty mode",
+			contentType: "application/x-protobuf;proto=io.prometheus.write.v2.Request;mode=",
+			wantErr:     true,
+		},
+		{
+			name:        "mode on v1 rejected",
+			contentType: "application/x-protobuf;proto=prometheus.WriteRequest;mode=stateless",
+			wantErr:     true,
+		},
+		{
+			name:        "mode without proto rejected",
+			contentType: "application/x-protobuf;mode=stateless",
+			wantErr:     true,
+		},
+		{
+			name:        "unknown parameter rejected",
+			contentType: "application/x-protobuf;proto=io.prometheus.write.v2.Request;unknown=param",
+			wantErr:     true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/receive", nil)
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
+			if tc.rwVersion != "" {
+				req.Header.Set("X-Prometheus-Remote-Write-Version", tc.rwVersion)
+			}
+			gotVer, gotMode, err := determineRWVersion(req)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantVer, gotVer)
+			require.Equal(t, tc.wantMode, gotMode)
+		})
+	}
+}
+
+func TestReceiveHTTP_RW2NegotiationAndStatus(t *testing.T) {
+	t.Parallel()
+
+	validV2Req := &writev2.Request{
+		Symbols: []string{"", "__name__", "test_metric"},
+		Timeseries: []writev2.TimeSeries{
+			{
+				LabelsRefs: []uint32{1, 2},
+				Samples:    []writev2.Sample{{Timestamp: 100, Value: 1.5}},
+			},
+		},
+	}
+	rawV2, err := proto.Marshal(validV2Req)
+	require.NoError(t, err)
+	compressedV2 := snappy.Encode(nil, rawV2)
+
+	t.Run("unsupported content-encoding returns 415 with Accept-Encoding", func(t *testing.T) {
+		appendables := []*fakeAppendable{{appender: newFakeAppender(nil, nil, nil)}}
+		handlers, _, closeFunc, err := newTestHandlerHashring("rw2_encoding", appendables, 1, AlgorithmHashmod, false)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, closeFunc())
+			for _, hh := range handlers {
+				hh.Close()
+			}
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/receive", bytes.NewReader([]byte("corrupt")))
+		req.Header.Set(handlers[0].options.TenantHeader, "test-tenant")
+		req.Header.Set("Content-Encoding", "gzip")
+		req.Header.Set("Content-Type", "application/x-protobuf;proto=io.prometheus.write.v2.Request")
+
+		rec := httptest.NewRecorder()
+		handlers[0].receiveHTTP(rec, req)
+		require.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
+		require.Equal(t, "snappy", rec.Header().Get("Accept-Encoding"))
+	})
+
+	t.Run("unsupported content-type returns 415 with Accept", func(t *testing.T) {
+		appendables := []*fakeAppendable{{appender: newFakeAppender(nil, nil, nil)}}
+		handlers, _, closeFunc, err := newTestHandlerHashring("rw2_ct", appendables, 1, AlgorithmHashmod, false)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, closeFunc())
+			for _, hh := range handlers {
+				hh.Close()
+			}
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/receive", bytes.NewReader(compressedV2))
+		req.Header.Set(handlers[0].options.TenantHeader, "test-tenant")
+		req.Header.Set("Content-Encoding", "snappy")
+		req.Header.Set("Content-Type", "application/x-protobuf;proto=io.prometheus.write.v2.Request;mode=unknown")
+
+		rec := httptest.NewRecorder()
+		handlers[0].receiveHTTP(rec, req)
+		require.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
+		require.Contains(t, rec.Header().Get("Accept"), "application/x-protobuf;proto=io.prometheus.write.v2.Request")
+	})
+
+	t.Run("valid v2 write returns 204 and written headers", func(t *testing.T) {
+		appendables := []*fakeAppendable{{appender: newFakeAppender(nil, nil, nil)}}
+		handlers, _, closeFunc, err := newTestHandlerHashring("rw2_204", appendables, 1, AlgorithmHashmod, false)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, closeFunc())
+			for _, hh := range handlers {
+				hh.Close()
+			}
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/receive", bytes.NewReader(compressedV2))
+		req.Header.Set(handlers[0].options.TenantHeader, "test-tenant")
+		req.Header.Set("Content-Encoding", "snappy")
+		req.Header.Set("Content-Type", "application/x-protobuf;proto=io.prometheus.write.v2.Request")
+
+		rec := httptest.NewRecorder()
+		handlers[0].receiveHTTP(rec, req)
+		require.Equal(t, http.StatusNoContent, rec.Code)
+		stats, err := remote.ParseWriteResponseStats(rec.Result())
+		require.NoError(t, err)
+		require.Equal(t, remote.WriteResponseStats{Samples: 1, Confirmed: true}, stats)
+	})
+
+	t.Run("v2 conflict error returns 400 and zero written headers", func(t *testing.T) {
+		conflictErrFn := func() error { return storage.ErrOutOfOrderSample }
+		appendables := []*fakeAppendable{{appender: newFakeAppender(conflictErrFn, nil, nil)}}
+		handlers, _, closeFunc, err := newTestHandlerHashring("rw2_conflict_400", appendables, 1, AlgorithmHashmod, false)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, closeFunc())
+			for _, hh := range handlers {
+				hh.Close()
+			}
+		})
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/receive", bytes.NewReader(compressedV2))
+		req.Header.Set(handlers[0].options.TenantHeader, "test-tenant")
+		req.Header.Set("Content-Encoding", "snappy")
+		req.Header.Set("Content-Type", "application/x-protobuf;proto=io.prometheus.write.v2.Request")
+
+		rec := httptest.NewRecorder()
+		handlers[0].receiveHTTP(rec, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		stats, err := remote.ParseWriteResponseStats(rec.Result())
+		require.NoError(t, err)
+		require.Equal(t, remote.WriteResponseStats{Confirmed: true}, stats)
+	})
+}
+
+func TestTranslateV2ToV1Validation(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		mode    string
+		req     writev2.Request
+		wantErr string
+	}{
+		{
+			name: "valid sample request",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "http_requests_total", "job", "api"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2, 3, 4},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 42}},
+					},
+				},
+			},
+		},
+		{
+			name: "empty symbols table with timeseries rejected",
+			req: writev2.Request{
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{0, 1},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+					},
+				},
+			},
+			wantErr: "symbol table must start with an empty string",
+		},
+		{
+			name: "invalid UTF-8 symbol rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "bad\xffname"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+					},
+				},
+			},
+			wantErr: "invalid UTF-8 in symbol table",
+		},
+		{
+			name: "odd labels_refs rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2, 1},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+					},
+				},
+			},
+			wantErr: "invalid labels_refs length",
+		},
+		{
+			name: "out-of-bounds metadata ref rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+						Metadata:   writev2.Metadata{HelpRef: 99},
+					},
+				},
+			},
+			wantErr: "metadata symbol reference out of bounds",
+		},
+		{
+			name: "out-of-bounds label ref rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 99},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+					},
+				},
+			},
+			wantErr: "label symbol reference out of bounds",
+		},
+		{
+			name: "missing __name__ label rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "job", "api"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+					},
+				},
+			},
+			wantErr: "time series missing __name__ label",
+		},
+		{
+			name: "metadata-only timeseries rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Metadata:   writev2.Metadata{Type: writev2.Metadata_METRIC_TYPE_GAUGE},
+					},
+				},
+			},
+			wantErr: "time series must contain at least one sample, histogram, or exemplar",
+		},
+		{
+			name: "mixed float samples and histograms rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+						Histograms: []writev2.Histogram{{Timestamp: 1000}},
+					},
+				},
+			},
+			wantErr: "time series cannot contain both float samples and histograms",
+		},
+		{
+			name: "exemplar-only timeseries allowed in default mode",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up", "trace_id", "abc"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Exemplars:  []writev2.Exemplar{{LabelsRefs: []uint32{3, 4}, Timestamp: 1000, Value: 1}},
+					},
+				},
+			},
+		},
+		{
+			name: "exemplar-only timeseries rejected in stateless mode",
+			mode: rwModeStateless,
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up", "trace_id", "abc"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Exemplars:  []writev2.Exemplar{{LabelsRefs: []uint32{3, 4}, Timestamp: 1000, Value: 1}},
+						Metadata:   writev2.Metadata{Type: writev2.Metadata_METRIC_TYPE_COUNTER},
+					},
+				},
+			},
+			wantErr: "time series must contain at least one sample or histogram in stateless mode",
+		},
+		{
+			name: "untyped metadata rejected in stateless mode",
+			mode: rwModeStateless,
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+						Metadata:   writev2.Metadata{Type: writev2.Metadata_METRIC_TYPE_UNSPECIFIED},
+					},
+				},
+			},
+			wantErr: "metadata metric type must be specified in stateless mode",
+		},
+		{
+			name: "float samples with histogram metadata rejected in stateless mode",
+			mode: rwModeStateless,
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "hist_bucket"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+						Metadata:   writev2.Metadata{Type: writev2.Metadata_METRIC_TYPE_HISTOGRAM},
+					},
+				},
+			},
+			wantErr: "classic histogram float samples are not allowed with histogram metadata in stateless mode",
+		},
+		{
+			name: "histograms with non-histogram metadata rejected in stateless mode",
+			mode: rwModeStateless,
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "hist"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Histograms: []writev2.Histogram{{Timestamp: 1000}},
+						Metadata:   writev2.Metadata{Type: writev2.Metadata_METRIC_TYPE_GAUGE},
+					},
+				},
+			},
+			wantErr: "histograms require histogram or gaugehistogram metadata in stateless mode",
+		},
+		{
+			name: "counter without start_timestamp rejected in stateless-st mode",
+			mode: rwModeStatelessST,
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "requests_total"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+						Metadata:   writev2.Metadata{Type: writev2.Metadata_METRIC_TYPE_COUNTER},
+					},
+				},
+			},
+			wantErr: "sample missing start_timestamp in stateless-st mode",
+		},
+		{
+			name: "summary _sum without start_timestamp rejected in stateless-st mode",
+			mode: rwModeStatelessST,
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "rpc_duration_seconds_sum"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+						Metadata:   writev2.Metadata{Type: writev2.Metadata_METRIC_TYPE_SUMMARY},
+					},
+				},
+			},
+			wantErr: "sample missing start_timestamp in stateless-st mode",
+		},
+		{
+			name: "histogram without start_timestamp rejected in stateless-st mode",
+			mode: rwModeStatelessST,
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "hist"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Histograms: []writev2.Histogram{{Sum: 1, Timestamp: 1000}},
+						Metadata:   writev2.Metadata{Type: writev2.Metadata_METRIC_TYPE_HISTOGRAM},
+					},
+				},
+			},
+			wantErr: "histogram sample missing start_timestamp in stateless-st mode",
+		},
+		{
+			name: "invalid exemplar labels rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "up", "trace_id", "abc"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Samples:    []writev2.Sample{{Timestamp: 1000, Value: 1}},
+						Exemplars:  []writev2.Exemplar{{LabelsRefs: []uint32{3, 4, 3, 4}, Timestamp: 1000, Value: 1}},
+					},
+				},
+			},
+			wantErr: "invalid exemplar labels",
+		},
+		{
+			name: "invalid histogram count mismatch rejected",
+			req: writev2.Request{
+				Symbols: []string{"", "__name__", "hist"},
+				Timeseries: []writev2.TimeSeries{
+					{
+						LabelsRefs: []uint32{1, 2},
+						Histograms: []writev2.Histogram{
+							{
+								Count:          &writev2.Histogram_CountInt{CountInt: 999},
+								Sum:            10,
+								Schema:         0,
+								PositiveSpans:  []writev2.BucketSpan{{Offset: 0, Length: 1}},
+								PositiveDeltas: []int64{1},
+								Timestamp:      1000,
+							},
+						},
+					},
+				},
+			},
+			wantErr: "invalid histogram",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := translateV2ToV1(tc.req, tc.mode)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+// Recommended CLI invocation:
+//
+//	export bench=translateV2ToV1 && go test -tags=slicelabels ./pkg/receive/... \
+//		-run '^$' -bench '^BenchmarkTranslateV2ToV1$' \
+//		-benchtime 1s -count 6 -cpu 2 -timeout 999m -benchmem \
+//		| tee ${bench}.txt
+func BenchmarkTranslateV2ToV1(b *testing.B) {
+	symbols := []string{"", "__name__", "http_requests_total", "help text", "requests", "trace_id", "abc123def456"}
+	baseRefs := []uint32{1, 2}
+	for i := range 9 {
+		symbols = append(symbols, fmt.Sprintf("label_name_%d", i), fmt.Sprintf("label_value_%d", i))
+		baseRefs = append(baseRefs, uint32(len(symbols)-2), uint32(len(symbols)-1))
+	}
+
+	ts := make([]writev2.TimeSeries, 500)
+	for i := range ts {
+		ts[i] = writev2.TimeSeries{
+			LabelsRefs: baseRefs,
+			Samples:    []writev2.Sample{{StartTimestamp: 100, Timestamp: 1000, Value: float64(i)}},
+			Exemplars:  []writev2.Exemplar{{LabelsRefs: []uint32{5, 6}, Timestamp: 1000, Value: 1}},
+			Metadata: writev2.Metadata{
+				Type:    writev2.Metadata_METRIC_TYPE_COUNTER,
+				HelpRef: 3,
+				UnitRef: 4,
+			},
+		}
+	}
+	req := writev2.Request{
+		Symbols:    symbols,
+		Timeseries: ts,
+	}
+
+	for _, mode := range []string{rwModeNone, rwModeStatelessST} {
+		b.Run("mode="+mode, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				_, err := translateV2ToV1(req, mode)
+				require.NoError(b, err)
+			}
+		})
+	}
 }
